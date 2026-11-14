@@ -83,7 +83,7 @@ def retryable(error):
     if isinstance(cause, ssl.SSLCertVerificationError):
         return False
     if isinstance(error, RequestError):
-        return error.status in {408, 409, 429, 499, 500, 502, 503, 504}
+        return error.status in {408, 409, 429, 499, 500, 502, 503, 504, 522, 524}
     return isinstance(error, (OSError, http.client.HTTPException))
 
 
@@ -140,7 +140,18 @@ def transfer(client, release, source):
             raise RuntimeError("Invalid upload offset returned by server")
         return status
 
-    status = checked(client.request("POST", base, identity))
+    def observe(method, path, body=None, *, timeout=30):
+        # Status and session creation are safe to replay; an unavailable status
+        # must not trigger a blind replay of a potentially committed part.
+        for attempt in range(3):
+            try:
+                return checked(client.request(method, path, body, timeout=timeout))
+            except (RuntimeError, OSError, http.client.HTTPException) as error:
+                if not retryable(error) or attempt == 2:
+                    raise
+                time.sleep(2 ** attempt)
+
+    status = observe("POST", base, identity)
     if status["state"] != "uploading":
         return
     limit = status.get("chunk_limit")
@@ -162,8 +173,10 @@ def transfer(client, release, source):
             except (RuntimeError, OSError, http.client.HTTPException) as error:
                 if not retryable(error) or attempt == 2:
                     raise
-                time.sleep(1)
-                status = checked(client.request("GET", base))
+                print(f"Upload connection interrupted at {offset / 1024**2:.1f} MiB; checking saved progress",
+                      file=sys.stderr, flush=True)
+                time.sleep(2 ** attempt)
+                status = observe("GET", base)
                 if status["received"] == end:
                     break  # The server committed the part but its reply was lost.
                 if status["received"] != offset:
@@ -173,6 +186,6 @@ def transfer(client, release, source):
         if current != progress:
             print(f"Uploaded {offset / 1024**2:.1f} / {total:.1f} MiB", file=sys.stderr, flush=True)
             progress = current
-    # A lost completion reply is safe to replay on an explicit --resume.
+    # Completion on the same session is idempotent, even after a lost reply.
     print("Verifying uploaded artifact on the server", file=sys.stderr, flush=True)
-    checked(client.request("POST", base + "/complete", timeout=180))
+    observe("POST", base + "/complete", timeout=180)

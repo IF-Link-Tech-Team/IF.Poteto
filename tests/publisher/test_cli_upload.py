@@ -71,8 +71,8 @@ class UploadCliTests(unittest.TestCase):
                 if self.path == source_route+'/complete':
                     assert len(state['received']) == state['identity']['size']
                     assert hashlib.sha256(state['received']).hexdigest() == state['identity']['sha256']
-                    state['queued'] += 1
-                    if state['phase'] == 2:
+                    if not state['queued']:
+                        state['queued'] += 1
                         return self.drop()
                     return self.respond(self.upload())
                 self.respond({'error': 'unexpected'}, 404)
@@ -124,11 +124,6 @@ class UploadCliTests(unittest.TestCase):
             # A resume publishes the saved bytes, not changed working files or a new build.
             (root/'index.html').write_text('not part of this deployment')
             state['phase'] = 2
-            lost_completion = command('--resume', release)
-            self.assertEqual(1, lost_completion.returncode, lost_completion.stderr)
-            self.assertEqual(1, state['queued'])
-            self.assertTrue(checkpoint.is_file())
-            state['phase'] = 3
             resumed = command('--resume', release)
             self.assertEqual(0, resumed.returncode, resumed.stderr)
             self.assertEqual('queued', json.loads(resumed.stdout)['state'])
@@ -160,6 +155,27 @@ class UploadCliTests(unittest.TestCase):
         self.assertFalse(cli_upload.retryable(ssl.SSLCertVerificationError('untrusted')))
         self.assertFalse(cli_upload.retryable(cli_upload.RequestError(403, 'forbidden')))
         self.assertTrue(cli_upload.retryable(cli_upload.RequestError(502, 'upstream')))
+        self.assertFalse(cli_upload.retryable(cli_upload.RequestError(525, 'TLS handshake')))
+
+    def test_edge_errors_check_confirmed_progress_before_replaying_a_part(self):
+        from unittest.mock import patch
+        source = b'abcdefgh'
+        view = {'size':len(source),'sha256':hashlib.sha256(source).hexdigest(),
+                'chunk_limit':4,'state':'uploading'}
+        client = Mock()
+        client.request.side_effect = [
+            cli_upload.RequestError(522, 'edge connection timeout'), view | {'received':0},
+            cli_upload.RequestError(524, 'lost response'),
+            cli_upload.RequestError(522, 'status temporarily unavailable'), view | {'received':4},
+            cli_upload.RequestError(522, 'part never reached server'), view | {'received':4},
+            view | {'received':8}, view | {'received':8,'state':'queued'},
+        ]
+        with patch.object(cli_upload.time, 'sleep'):
+            cli_upload.transfer(client, 'a'*24, source)
+        calls = client.request.call_args_list
+        self.assertEqual(['POST','POST','PUT','GET','GET','PUT','GET','PUT','POST'],
+                         [call.args[0] for call in calls])
+        self.assertEqual([b'abcd', b'efgh', b'efgh'], [call.args[2] for call in calls if call.args[0] == 'PUT'])
 
 
 class ImportTransferTests(unittest.TestCase):
