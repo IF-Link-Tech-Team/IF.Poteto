@@ -1,10 +1,10 @@
 # Poteto
 
-Poteto publishes an application directory to an HTTPS preview. Use it from a terminal or give an agent a project-scoped preview token. No framework-specific directory layout is required.
+Poteto builds your application locally and publishes it to an HTTPS preview or an explicitly authorized production URL. Use it from a terminal or give an agent a project-scoped credential. No framework-specific directory layout is required.
 
 ```sh
 poteto plan . --preview --json
-poteto deploy . --preview --url-only
+poteto deploy . --local-build --preview --url-only
 ```
 
 `plan` checks the upload locally without authenticating, building, or creating a deployment. It reports the runtime, build and start commands, and which directory will be public. Upload a ready-made static directory, use the npm runtime for a Node app, or bring a Dockerfile. Keep non-default build settings in `poteto.json`.
@@ -16,7 +16,7 @@ poteto plan . --remote --preview --json
 poteto plan . --prebuilt --remote --preview --json
 ```
 
-Add `--remote` after login to check the selected project's publishing permission, runtime capacity, upload limits, storage budget and database/volume bindings. It sends configuration and byte counts, not application files, and creates no deployment. Image preflight includes the compressed upload, unpacked archive files, and an estimate of the normalized image. It reports required and remaining bytes and rejects insufficient storage before image upload. New personal accounts have a 1 GiB artifact budget; existing account limits and the single-image limits are unchanged. Use `--project PROJECT_ID` for a manual token. The check is a snapshot: deployment repeats admission checks, and generated files or normalized image storage are checked when available. Without `--remote`, `plan` remains offline and does not read credentials.
+Add `--remote` after login to check the selected project's publishing permission, runtime capacity, upload limits, storage budget and database/volume bindings. It sends configuration and byte counts, not application files, and creates no deployment. For a personal Dockerfile project, run the offline plan first, then `deploy --local-build`; that command automatically preflights the built image before uploading. A remote source plan is not an image-build check. Image preflight includes the compressed upload, unpacked archive files, and an estimate of the normalized image. It reports required and remaining bytes and rejects insufficient storage before image upload. New personal accounts default to 1 GiB. On hosted Poteto, existing active IF.Link personal accounts have also been raised to at least 1 GiB; larger limits are preserved. Single images remain limited to 128 MiB compressed and 512 MiB expanded. Use `--project PROJECT_ID` for a manual token. The check is a snapshot: deployment repeats admission checks, and generated files or normalized image storage are checked when available. Without `--remote`, `plan` remains offline and does not read credentials.
 
 ## CLI and Agent Skill
 
@@ -54,7 +54,7 @@ Give the Agent the private `agent.json` file through `POTETO_TOKEN_FILE`, not th
 
 For direct work on another owned project, use `poteto login --project PROJECT_ID --output /secure/project.json`; add `--production` or `--production --manage-project` only for the permissions you need. The usual login still selects the original project. If you deleted that project, workspace login can list or create a replacement without creating another account; choose an active project explicitly for a deployment login.
 
-New workspace accounts allow five active projects with one concurrent deployment. All projects share the same account storage and runtime budget; additional projects do not reserve additional CPU or memory. Operators enable `personal_workspaces: true` alongside `personal_previews` and `personal_production` in the publisher runtime configuration. Existing accounts keep their stored limits. To adjust a specific account, controller root can run `python -m publisher.admin set-project-limit ACCOUNT_NAME --confirm-account ACCOUNT_ID --projects 5`. This changes only its project count; legacy linked projects retain operator-managed authorization.
+New workspace accounts allow five active projects with one concurrent deployment. All projects share the same account storage and runtime budget; additional projects do not reserve additional CPU or memory. Operators enable `personal_workspaces: true` alongside `personal_previews` and `personal_production` in the publisher runtime configuration. Existing accounts keep their stored project-count limits. To adjust a specific account, controller root can run `python -m publisher.admin set-project-limit ACCOUNT_NAME --confirm-account ACCOUNT_ID --projects 5`. This changes only its project count; legacy linked projects retain operator-managed authorization.
 
 ## Link a directory once
 
@@ -62,7 +62,7 @@ New workspace accounts allow five active projects with one concurrent deployment
 poteto login
 poteto link --project PROJECT_ID
 poteto plan . --preview --json
-poteto deploy . --preview --url-only
+poteto deploy . --local-build --preview --url-only
 poteto ls
 poteto inspect https://preview-DEPLOYMENT_ID.page.iflink.tech
 ```
@@ -75,7 +75,7 @@ Use `poteto deploy . --prod` only when you intend a production deployment and ha
 
 `POTETO_TOKEN` can supply a token through the environment; the existing `PAAS_TOKEN`, `PAAS_TOKEN_FILE`, and `PAAS_URL` variables remain supported. Never put a token in a command argument.
 
-Agents can follow the [Poteto preview skill](skills/poteto-deploy/SKILL.md) for installation, preflight, publishing, and verification.
+Agents can follow the [Poteto deployment skill](skills/poteto-deploy/SKILL.md) or its [public download](https://poteto.iflink.tech/skills/poteto-deploy/SKILL.md) for installation, preflight, publishing, and verification.
 
 Use `poteto logs DEPLOYMENT_ID --follow` to watch a build as it runs, including a deployment started with `--no-wait`. Build output goes to stderr; the final deployment remains JSON on stdout.
 
@@ -83,9 +83,27 @@ For application stdout/stderr after deployment, use `poteto logs DEPLOYMENT_ID -
 
 Agents can use `poteto logs DEPLOYMENT_ID --runtime --follow --jsonl` for JSON Lines. Each line includes the deployment ID and a cursor; resume with `--after CURSOR` on that same deployment. Brief transport interruptions resume from the last cursor. Expired credentials, a removed deployment, and TLS verification errors stop the command rather than retrying indefinitely. Plain `logs` and build `--follow` keep their existing behavior.
 
+## Choose your project's address
+
+Poteto 0.23.0 supports a fixed prefix such as `my-blog.page.iflink.tech`. With the owner's explicit approval, use a project-management credential, not an ordinary preview or production-deployment token:
+
+```sh
+poteto login --production --manage-project --output /secure/project-owner.json
+export POTETO_TOKEN_FILE=/secure/project-owner.json
+poteto project alias my-blog
+poteto project alias
+poteto project alias --remove
+```
+
+The selected project comes from your login or directory link; add `--project PROJECT_ID` to choose it explicitly. Setting an alias does not publish anything. It follows that project's current production release, including updates and rollbacks, and returns 404 until a production release is available. The original `app-PROJECT_ID.page.iflink.tech` and immutable preview URLs remain unchanged. Wait a few seconds for route synchronization and check the alias over public HTTPS. `inspect` and `logs` still take a deployment ID or the original platform URL, not the custom prefix.
+
+Use 3–48 lowercase letters, digits or hyphens, starting with a letter and ending with a letter or digit. Names are globally unique; system names and the `app-` / `preview-` prefixes are reserved. Renamed or removed names stay reserved to the original project so another tenant cannot take over old links. Display-name changes do not change this alias. You do not need to configure DNS or certificates, and external custom domains are not part of this feature.
+
+For self-hosted platforms, deploy the alias API and schema, configure `new_app_domain`, and run the matching `publisher.origin_routes` synchronizer. The HTTPS ingress must accept the application's wildcard domain, use its valid certificate, and reject hosts missing from the authenticated map. Alias entries target the existing stable production route; never map them to a private preview.
+
 ## Resume an interrupted upload
 
-CLI 0.12.0 and an updated server transfer artifacts in 2 MiB parts, with committed offsets and a complete-file integrity check before queueing the deployment. A dropped connection does not require uploading completed parts again.
+The CLI and an updated server transfer artifacts in 2 MiB parts, with committed offsets and a complete-file integrity check before queueing the deployment. Since 0.22.1, transient EdgeOne 522/524 errors also trigger bounded recovery: the CLI checks the confirmed offset before retrying, including when a reply was lost after a part was committed. Certificate-validation and permission failures are not retried. A dropped connection does not require uploading completed parts again.
 
 ```sh
 poteto deploy . --local-build --preview
@@ -163,7 +181,7 @@ poteto redeploy https://preview-DEPLOYMENT_ID.page.iflink.tech --url-only
 
 `env set` updates one variable without replacing the others. Use a value file outside the upload directory, `--stdin`, or the hidden interactive prompt; values are never accepted as command arguments or returned by the API. New `env` subcommands default to preview. The existing `poteto env --file variables.json` still replaces the full production environment unless `--target preview` is specified. Variable management requires `env:write`; an agent's preview-only token cannot edit variables.
 
-Changes apply to the runtime of new deployments. `redeploy` rebuilds the original uploaded source using the current runtime environment and keeps its build configuration and resource bindings. It creates a new deployment, leaving the original untouched. It defaults to preview; production requires `--prod` and production permission. A database or volume binding must belong to the selected stage. A configured migration command runs again, so it must be repeatable and backward-compatible.
+Changes apply to the runtime of new deployments. `redeploy` uses the original uploaded artifact and current runtime environment, preserving build configuration and resource bindings. Source deployments rebuild on the server; locally built image deployments reuse their uploaded image. Changed local code needs a new `deploy --local-build`. It creates a new deployment, leaving the original untouched. It defaults to preview; production requires `--prod` and production permission. A database or volume binding must belong to the selected stage. A configured migration command runs again, so it must be repeatable and backward-compatible.
 
 The CLI prints a request ID to stderr. If a request is interrupted, repeat with `--request-id THE_SAME_ID` to resume the same candidate rather than creating another. `--no-wait` returns the queued candidate; `inspect` and `logs` can observe it later. `retry` remains the command for resuming a failed candidate in place.
 
@@ -197,8 +215,6 @@ poteto deploy . --local-build --preview --url-only
 
 Build trusted projects only. The image context follows Poteto's upload exclusions, including `.env*`, credentials, `.git`, `.poteto` and `node_modules`. Build output goes to stderr; `--url-only` keeps stdout suitable for automation. Temporary image tags are removed after packaging; Docker's build cache remains for the next build. Use a local Docker context or an independent CI runner to keep compilation off the publishing server.
 
-For separate CI build and publish jobs:
-
 ## Build static sites locally or in CI
 
 ```sh
@@ -207,7 +223,7 @@ poteto plan . --prebuilt --json
 poteto deploy . --prebuilt --preview --url-only
 ```
 
-`build` runs trusted npm projects' locked install and configured build locally, then packages only the static output into `.poteto/output.tar.gz`. Plain HTML can be packaged without npm. Pass custom `--config` or `--preset` to `build`, not to `deploy --prebuilt`. Copy the archive to the same relative path in a separate CI publish job if needed. Prebuilt deployments default to preview; production still requires `--prod` and a production-capable credential. This path is for static output, including a completed Next.js static export; SSR and APIs continue to use the existing runtime paths.
+`build` runs trusted npm projects' locked install and configured build locally, then packages only the static output into `.poteto/output.tar.gz`. Plain HTML can be packaged without npm. For existing output, use `poteto build dist/`, then run `poteto plan dist/ --prebuilt` and `poteto deploy dist/ --prebuilt` on that same directory; `--prebuilt` does not create a package. Pass custom `--config` or `--preset` to `build`, not to `deploy --prebuilt`. Copy the archive to the same relative path in a separate CI publish job if needed. Prebuilt deployments default to preview; production still requires `--prod` and a production-capable credential. This path is for static output, including a completed Next.js static export; SSR and APIs continue to use the existing runtime paths.
 
 ## Publish a prebuilt dynamic image
 
@@ -228,9 +244,9 @@ poteto plan . --prebuilt-image .poteto/image.tar.gz --json
 poteto deploy . --prebuilt-image .poteto/image.tar.gz --preview --url-only
 ```
 
-Use Docker Engine with API 1.48 or newer for platform-specific image export. Poteto accepts a single image (128 MiB compressed, 512 MiB expanded); build a lean final image. Use the image's entrypoint and listen on `0.0.0.0:$PORT` as UID 10001. Runtime settings such as the health check and database binding come from `poteto.json` or `--config`, not from build flags. Personal previews run in gVisor; managed projects retain their existing isolated tenant runtime. Existing source deployments are unchanged.
+Use Docker Engine with API 1.48 or newer for platform-specific image export. Poteto accepts a single image (128 MiB compressed, 512 MiB expanded); build a lean final image. Use the image's entrypoint and listen on `0.0.0.0:$PORT` as UID 10001. Make application files readable by that UID and keep them outside `/tmp`, which is replaced by runtime scratch space. The root filesystem is read-only. Runtime settings such as the health check and database binding come from `poteto.json` or `--config`, not from build flags. Personal previews run in gVisor; managed projects retain their existing isolated tenant runtime. Existing source deployments are unchanged.
 
-The [Next.js + PostgreSQL fixture](fixtures/next-postgres) uses standalone output, runtime-only database credentials, and an idempotent migration. Its image is built and exercised by the dedicated SSR acceptance workflow.
+The [Next.js + PostgreSQL fixture](https://github.com/Last-emo-boy/poteto/tree/main/fixtures/next-postgres) uses standalone output, runtime-only database credentials, and an idempotent migration. Its image is built and exercised by the dedicated SSR acceptance workflow.
 
 The source/static upload limits remain 50/200 MiB. To budget retained images and rollback candidates for one account, an operator can use `paas-admin set-storage-limit ACCOUNT_NAME --confirm-account ACCOUNT_ID --mib 2048` on the controller. This does not change other accounts or their runtime limits; lowering it below current reservations is refused.
 
@@ -238,8 +254,8 @@ The source/static upload limits remain 50/200 MiB. To budget retained images and
 
 ```sh
 poteto plan . --preset nextjs --preview --json
-poteto deploy . --preset nextjs --preview
-poteto deploy . --preset vite --preview
+poteto deploy . --preset nextjs --local-build --preview
+poteto deploy . --preset vite --local-build --preview
 ```
 
 Or add `"preset": "nextjs"` / `"preset": "vite"` to `poteto.json`. Use the same preset for preflight and deployment. Explicit manifest settings override preset defaults; a selected preset requires its matching runtime. The preset field is consumed locally, not sent as an extra server parameter.
@@ -285,7 +301,7 @@ poteto deploy . --local-build --prod --url-only
 
 The returned production URL stays the same across releases. Static output uses shared hosting; prebuilt images stay in gVisor without a tenant VM. A release must pass health checks before traffic switches. `poteto rollback RELEASE_ID` restores a retained healthy release without rebuilding it. It changes traffic, not database contents; migrations must remain compatible with the previous application version.
 
-A production login grants this project's deployment read/write operations, including promotion, rollback, non-current release cleanup and explicitly configured web egress. It does not grant environment editing, data management, account administration or token issuance. Add `--manage-project` only when you need to manage the project's environments, databases, encrypted backups or deletion. That credential can manage both stages. Preview-only login flags cannot be combined with production login; keep the preview Agent credential in its own file.
+A production login grants this project's deployment read/write operations, including promotion, rollback, non-current release cleanup and explicitly configured web egress. It does not grant environment editing, data management, account administration or token issuance. Add `--manage-project` only when you need to manage the project's alias, environments, databases, encrypted backups or deletion. That credential can manage both stages. Preview-only login flags cannot be combined with production login; keep the preview Agent credential in its own file.
 
 For persistent production data, use the management credential to create `poteto database create --stage production`, then bind that database in the production deployment configuration. Preview and production databases have different IDs and credentials. A data-bound preview cannot be promoted into production; publish with `--prod` and the production binding instead. Likewise, use a new production deployment when environment settings differ. Production images may sleep just like previews; set `sleep: false` explicitly if the application needs to remain running, within the same resource budget.
 
@@ -336,7 +352,7 @@ Snapshots containing native databases use `ovh-paas-platform/3` with logical Pos
 
 ## Trusted native builds on Linux
 
-Poteto defaults to a disposable VM builder (KVM or explicitly configured TCG). On a Linux/amd64 host with Docker and Buildx, an operator can enable the independent native driver for projects whose source, dependencies and uploaders are trusted. Tenant runtimes, data and routes still use their existing VM path. A login or scoped upload token does not make code trusted.
+Server-side source builds default to a disposable VM builder (KVM or explicitly configured TCG); ordinary personal projects use client-side builds instead. On a Linux/amd64 host with Docker and Buildx, an operator can enable the independent native driver for projects whose source, dependencies and uploaders are trusted. Tenant runtimes, data and routes still use their existing VM path. A login or scoped upload token does not make code trusted.
 
 Create one dedicated BuildKit builder per trusted project, using the configuration directory under the executor state root (default shown). Choose a vetted BuildKit image for your registry with the driver option `image=...` if the default is not reachable.
 
@@ -352,7 +368,7 @@ sudo env HOME="$CFG" BUILDX_CONFIG="$CFG/buildx" \
   --buildkitd-config infra/execution/native-buildkit.toml unix:///var/run/docker.sock
 ```
 
-Merge `"native_build_projects": {"PROJECT_ID": "OWNING_ACCOUNT_ID"}` into the executor's existing `config.json`. The publisher passes project identity internally; there is no client-side builder switch. Existing jobs keep their driver, and image imports always stay on the VM path. BuildKit caches are scoped to the dedicated project builder and kept when it stops. The supplied configuration sets cache collection targets; leave disk headroom for active builds.
+Merge `"native_build_projects": {"PROJECT_ID": "OWNING_ACCOUNT_ID"}` into the executor's existing `config.json`. The publisher passes project identity internally; there is no client-side builder switch. Existing jobs keep their driver. Registry image imports use the isolated importer; uploaded prebuilt images use the separate normalization path and do not start a build VM. BuildKit caches are scoped to the dedicated project builder and kept when it stops. The supplied configuration sets cache collection targets; leave disk headroom for active builds.
 
 Remove the pair to disable native builds. A queued native job that loses authorization fails rather than switching drivers. After jobs drain, the operator can remove the dedicated builder and its cache without touching application data.
 
@@ -386,4 +402,4 @@ uv run poteto --help
 uv run python -m unittest discover -s tests/publisher
 ```
 
-Licensed under [MIT](LICENSE).
+Licensed under [MIT](https://github.com/Last-emo-boy/poteto/blob/main/LICENSE).

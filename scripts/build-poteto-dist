@@ -77,8 +77,10 @@ p{{color:#466052}}pre{{padding:18px;background:#132e24;color:#e2f4c1;border-radi
 <p>macOS / Linux</p><pre><code>{command}</code></pre>
 <p>Windows · PowerShell 7+</p><pre><code>{powershell}</code></pre>
 <p>运行 <code>poteto login</code>，用 <code>poteto plan .</code> 预检，再用 <code>poteto deploy . --local-build --preview</code> 本地构建并发布。动态应用需要 Docker 和项目镜像权限。</p>
-<a href="/install.sh">Shell 脚本</a> · <a href="/install.ps1">PowerShell 脚本</a> · <a href="/poteto-{VERSION}.pyz">下载 CLI</a> · <a href="/{SKILL.as_posix()}">Agent Skill</a>
+<p>自定义前缀：获项目管理授权后运行 <code>poteto project alias my-blog</code>，使用 <code>my-blog.page.iflink.tech</code>。别名跟随正式版本，原地址保留。</p>
+<a href="/README.md">使用文档</a> · <a href="/install.sh">Shell 脚本</a> · <a href="/install.ps1">PowerShell 脚本</a> · <a href="/poteto-{VERSION}.pyz">下载 CLI</a> · <a href="/{SKILL.as_posix()}">Agent Skill</a>
 </main></html>""", encoding="utf-8")
+    shutil.copyfile(ROOT / "README.md", args.output / "README.md")
     print(args.output.resolve())
 
 
