@@ -1,4 +1,4 @@
-# Poteto
+# IF.Poteto
 
 Poteto builds your application locally and publishes it to an HTTPS preview or an explicitly authorized production URL. Use it from a terminal or give an agent a project-scoped credential. No framework-specific directory layout is required.
 
@@ -246,7 +246,7 @@ poteto deploy . --prebuilt-image .poteto/image.tar.gz --preview --url-only
 
 Use Docker Engine with API 1.48 or newer for platform-specific image export. Poteto accepts a single image (128 MiB compressed, 512 MiB expanded); build a lean final image. Use the image's entrypoint and listen on `0.0.0.0:$PORT` as UID 10001. Make application files readable by that UID and keep them outside `/tmp`, which is replaced by runtime scratch space. The root filesystem is read-only. Runtime settings such as the health check and database binding come from `poteto.json` or `--config`, not from build flags. Personal previews run in gVisor; managed projects retain their existing isolated tenant runtime. Existing source deployments are unchanged.
 
-The [Next.js + PostgreSQL fixture](https://github.com/Last-emo-boy/poteto/tree/main/fixtures/next-postgres) uses standalone output, runtime-only database credentials, and an idempotent migration. Its image is built and exercised by the dedicated SSR acceptance workflow.
+The [Next.js + PostgreSQL fixture](https://github.com/IF-Link-Tech-Team/IF.Poteto/tree/main/fixtures/next-postgres) uses standalone output, runtime-only database credentials, and an idempotent migration. Its image is built and exercised by the dedicated SSR acceptance workflow.
 
 The source/static upload limits remain 50/200 MiB. To budget retained images and rollback candidates for one account, an operator can use `paas-admin set-storage-limit ACCOUNT_NAME --confirm-account ACCOUNT_ID --mib 2048` on the controller. This does not change other accounts or their runtime limits; lowering it below current reservations is refused.
 
@@ -402,4 +402,4 @@ uv run poteto --help
 uv run python -m unittest discover -s tests/publisher
 ```
 
-Licensed under [MIT](https://github.com/Last-emo-boy/poteto/blob/main/LICENSE).
+Licensed under [MIT](https://github.com/IF-Link-Tech-Team/IF.Poteto/blob/main/LICENSE).
