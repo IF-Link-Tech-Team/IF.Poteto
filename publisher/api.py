@@ -67,6 +67,8 @@ def create_app(settings=None):
     register_imports(app,store,actor)
     from publisher.source_uploads import register as register_uploads
     register_uploads(app, store, actor)
+    from publisher.project_aliases import register as register_aliases
+    register_aliases(app, store, actor)
     from publisher.preview_management import register as register_previews
     register_previews(app, store, actor)
     from publisher.preview_retention import register as register_retention
@@ -105,10 +107,12 @@ def create_app(settings=None):
         with store.connection() as db:
             rows = db.execute("SELECT d.id,d.project_id,d.config,d.state,p.app_domain FROM deployments d JOIN projects p ON p.id=d.project_id WHERE p.state='active' AND d.state IN ('deploying','activating','ready')").fetchall()
             projects = db.execute("SELECT id,app_domain FROM projects WHERE state='active' AND (current_deployment IS NOT NULL OR id IN (SELECT project_id FROM jobs WHERE kind IN ('promote','rollback') AND state IN ('queued','running')))").fetchall()
+            from publisher.project_aliases import routes
+            aliases = routes(db, settings)
         hosts = {settings.hostname(r["project_id"], r["id"],domain=r["app_domain"]) for r in rows}
         hosts.update(settings.hostname(r["project_id"],domain=r["app_domain"]) for r in rows if json.loads(r["config"])["target"] == "production")
         hosts.update(settings.hostname(r["id"],domain=r["app_domain"]) for r in projects)
-        return {"hosts": sorted(hosts)}
+        return {"hosts": sorted(hosts), "aliases": aliases}
 
     @app.get("/v1/me", tags=["Account"])
     def me(user=Depends(actor)):

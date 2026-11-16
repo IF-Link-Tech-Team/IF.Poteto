@@ -390,6 +390,10 @@ def main(prog="poteto"):
     actions=project.add_subparsers(dest='project_action',required=True)
     rename=actions.add_parser('rename');rename.add_argument('project');rename.add_argument('name')
     status_project=actions.add_parser('status');status_project.add_argument('project',nargs='?')
+    alias=actions.add_parser('alias',help='Set or inspect a fixed project address; requires project management to change')
+    alias.add_argument('name',nargs='?')
+    alias.add_argument('--project')
+    alias.add_argument('--remove',action='store_true')
     delete_project=actions.add_parser('delete');delete_project.add_argument('project')
     delete_project.add_argument('--destroy-data',action='store_true',help='Also destroy all project databases and stored files')
     delete_project.add_argument('--no-wait',action='store_true')
@@ -665,6 +669,15 @@ def main(prog="poteto"):
             path='/v1/projects/'+args.project
             if args.project_action=='rename':result=client.request('PATCH',path,{'name':args.name})
             elif args.project_action=='status':result=client.request('GET',path)
+            elif args.project_action=='alias':
+                if args.remove and args.name:
+                    raise ValueError('Choose an alias name or --remove, not both')
+                if args.name:
+                    result=client.request('PUT',path+'/alias',{'alias':args.name})
+                elif args.remove:
+                    result=client.request('DELETE',path+'/alias')
+                else:
+                    result=client.request('GET',path+'/alias')
             else:
                 result=client.request('DELETE',path+('?destroy_data=true' if args.destroy_data else ''))
                 if not args.no_wait:result=client.wait_job(result['job_id'])

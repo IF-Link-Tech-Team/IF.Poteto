@@ -69,6 +69,12 @@ poteto deploy "$APP_DIR" --prebuilt --project "$PROJECT_ID" --preview --url-only
 
 Next.js / Vite 项目可在预检和部署时同时加 `--preset nextjs` / `--preset vite`，或在 `poteto.json` 指定 `preset`。保留已有目录和锁文件。只有用户明确选择服务器源码构建时，才省略 `--local-build`。预览变量操作需用户已授予的 `previews:env` 或管理凭据 `env:write`，不要擅自扩权；`poteto redeploy <预览 URL> --preview --url-only` 使用已保存的构建方式，预构建镜像复用成品，源码发布会在服务器重建。请求中断时沿用 stderr 中的 `--request-id`，不要重新生成请求。
 
+## 项目固定地址
+
+Poteto 0.23.0 支持项目别名，例如 `my-blog.page.iflink.tech`。用 `poteto project alias` 查看；在用户授权命名后，用项目管理凭据执行 `poteto project alias my-blog`，指定其它项目时加 `--project PROJECT_ID`，移除用 `--remove`。普通预览部署凭据只能查看；需要用户自行用 `poteto login --production --manage-project` 授权管理，不能为设置别名擅自提升权限或发布生产版本。
+
+别名只跟随该项目的正式版本；没有正式版本时保留名字但不接流量。设置不会把预览变成生产，更新、回滚不需改别名。原 `app-项目ID` 和随机预览地址不变；路由同步通常需数秒，返回配置后还要实际访问 HTTPS 验证。名字为 3–48 位小写字母、数字、连字符，字母开头，不以连字符结尾，平台保留名称不可用。改名或移除后的旧名仍归原项目保留，避免旧链接被别的用户接管。
+
 ## 私有预览访问
 
 私有预览使用独立访问密钥，不接受部署 token 作为网站密码。只有用户明确要求保护预览且提供项目管理权限时，才运行 `poteto protection enable --output /secure/reviewer.poteto-key`，等 `protected: true` 再宣称生效；失败时查看任务并用 `protection retry`，不要回退为公开分享。保护覆盖该项目的现有和未来预览，稳定生产地址不变。

@@ -138,6 +138,8 @@ class Store:
         self.cipher = Fernet(key_path.read_bytes())
         with self.connection() as db:
             db.executescript(SCHEMA)
+            from publisher.project_aliases import SCHEMA as ALIAS_SCHEMA
+            db.executescript(ALIAS_SCHEMA)
         with self.connection() as db:
             if 'resource_id' not in {r['name'] for r in db.execute('PRAGMA table_info(jobs)')}:
                 db.execute('ALTER TABLE jobs ADD COLUMN resource_id TEXT REFERENCES data_resources(id)')
