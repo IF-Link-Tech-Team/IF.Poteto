@@ -138,6 +138,21 @@ def add_layer(archive, name, path, expected, limit, *, scratch):
     return size
 
 
+def normalize_saved(source: Path, destination: Path, release_id: str):
+    """Revalidate an exported canonical image without executing it in a builder."""
+    from publisher.image_contract import ARCHIVE_LIMIT
+    if not 0 < source.stat().st_size <= ARCHIVE_LIMIT:
+        raise ImageError('Saved image exceeds the image archive limit')
+    with tempfile.NamedTemporaryFile(dir=destination.parent, suffix='.gz') as temporary:
+        with source.open('rb') as saved, gzip.GzipFile(fileobj=temporary, mode='wb', mtime=0) as compressed:
+            while chunk := saved.read(1024**2):
+                compressed.write(chunk)
+                if temporary.tell() > TRANSPORT_LIMIT:
+                    raise ImageError('Saved image exceeds the compressed image limit')
+        temporary.flush()
+        return normalize(Path(temporary.name), destination, release_id)
+
+
 def normalize(source: Path, destination: Path, release_id: str):
     """Return size receipts; output has exactly one platform-owned tag."""
     if not re.fullmatch(r"[a-f0-9]{24}", release_id):

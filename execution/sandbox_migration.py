@@ -182,9 +182,12 @@ def operation(root, config, release, body, build_status):
         raise ValueError('Native preview migrations are not enabled')
     build = json.loads((Path(root)/'builds'/release/'spec.json').read_text())
     status = build_status(release)
-    if (build.get('account_id'),build.get('project_id'),build.get('runtime'),build.get('personal_preview'),
-            status.get('driver'),status.get('state'),status.get('image')) != (
-            account,project,'image',True,'prebuilt','succeeded','paas-release:'+release):
+    normalized = (status.get('driver') == 'prebuilt' and build.get('runtime') in {'image', 'image-import'})
+    remote = (status.get('driver') == 'remote' and build.get('runtime') in {'node', 'dockerfile'}
+              and build.get('platform_build') is True and bool(config.get('platform_builder')))
+    if not (normalized or remote) or (build.get('account_id'),build.get('project_id'),build.get('personal_preview'),
+            status.get('state'),status.get('image')) != (
+            account,project,True,'succeeded','paas-release:'+release):
         raise ValueError('Migration requires this project\'s successful prebuilt image')
     bound = binding(root,config,database,account,project)
     sandbox.check_pool(Path(root),config,release,memory,cpu)

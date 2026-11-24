@@ -1,10 +1,10 @@
 # IF.Poteto
 
-Poteto builds your application locally and publishes it to an HTTPS preview or an explicitly authorized production URL. Use it from a terminal or give an agent a project-scoped credential. No framework-specific directory layout is required.
+Poteto builds your application in isolated platform CI or on your computer, then publishes it to an HTTPS preview or an explicitly authorized production URL. Use it from a terminal or give an agent a project-scoped credential. No framework-specific directory layout is required.
 
 ```sh
 poteto plan . --preview --json
-poteto deploy . --local-build --preview --url-only
+poteto deploy . --remote-build --preview --url-only
 ```
 
 `plan` checks the upload locally without authenticating, building, or creating a deployment. It reports the runtime, build and start commands, and which directory will be public. Upload a ready-made static directory, use the npm runtime for a Node app, or bring a Dockerfile. Keep non-default build settings in `poteto.json`.
@@ -16,7 +16,7 @@ poteto plan . --remote --preview --json
 poteto plan . --prebuilt --remote --preview --json
 ```
 
-Add `--remote` after login to check the selected project's publishing permission, runtime capacity, upload limits, storage budget and database/volume bindings. It sends configuration and byte counts, not application files, and creates no deployment. For a personal Dockerfile project, run the offline plan first, then `deploy --local-build`; that command automatically preflights the built image before uploading. A remote source plan is not an image-build check. Image preflight includes the compressed upload, unpacked archive files, and an estimate of the normalized image. It reports required and remaining bytes and rejects insufficient storage before image upload. New personal accounts default to 1 GiB. On hosted Poteto, existing active IF.Link personal accounts have also been raised to at least 1 GiB; larger limits are preserved. Single images remain limited to 128 MiB compressed and 512 MiB expanded. Use `--project PROJECT_ID` for a manual token. The check is a snapshot: deployment repeats admission checks, and generated files or normalized image storage are checked when available. Without `--remote`, `plan` remains offline and does not read credentials.
+Add `--remote` after login to check the selected project's publishing permission, runtime capacity, upload limits, storage budget and database/volume bindings. It sends configuration and byte counts, not application files, and creates no deployment. For a Dockerfile or Node project, run the offline plan first, then `deploy --remote-build`. The CLI checks permissions, capacity and storage before sending source. Source preflight reserves the maximum normalized image size (516 MiB including archive overhead); actual built bytes replace that reservation. It cannot predict a compiler error. `deploy --local-build` remains available and preflights the actual local image before upload. Image preflight includes the compressed upload, unpacked archive files, and an estimate of the normalized image. It reports required and remaining bytes and rejects insufficient storage before image upload. New personal accounts default to 1 GiB. On hosted Poteto, existing active IF.Link personal accounts have also been raised to at least 1 GiB; larger limits are preserved. Single images remain limited to 128 MiB compressed and 512 MiB expanded. Use `--project PROJECT_ID` for a manual token. The check is a snapshot: deployment repeats admission checks, and generated files or normalized image storage are checked when available. Without `--remote`, `plan` remains offline and does not read credentials.
 
 ## CLI and Agent Skill
 
@@ -62,7 +62,7 @@ New workspace accounts allow five active projects with one concurrent deployment
 poteto login
 poteto link --project PROJECT_ID
 poteto plan . --preview --json
-poteto deploy . --local-build --preview --url-only
+poteto deploy . --remote-build --preview --url-only
 poteto ls
 poteto inspect https://preview-DEPLOYMENT_ID.page.iflink.tech
 ```
@@ -181,7 +181,7 @@ poteto redeploy https://preview-DEPLOYMENT_ID.page.iflink.tech --url-only
 
 `env set` updates one variable without replacing the others. Use a value file outside the upload directory, `--stdin`, or the hidden interactive prompt; values are never accepted as command arguments or returned by the API. New `env` subcommands default to preview. The existing `poteto env --file variables.json` still replaces the full production environment unless `--target preview` is specified. Variable management requires `env:write`; an agent's preview-only token cannot edit variables.
 
-Changes apply to the runtime of new deployments. `redeploy` uses the original uploaded artifact and current runtime environment, preserving build configuration and resource bindings. Source deployments rebuild on the server; locally built image deployments reuse their uploaded image. Changed local code needs a new `deploy --local-build`. It creates a new deployment, leaving the original untouched. It defaults to preview; production requires `--prod` and production permission. A database or volume binding must belong to the selected stage. A configured migration command runs again, so it must be repeatable and backward-compatible.
+Changes apply to the runtime of new deployments. `redeploy` uses the original uploaded artifact and current runtime environment, preserving build configuration and resource bindings. Source deployments rebuild on the server; locally built image deployments reuse their uploaded image. Changed local code needs a new `deploy --remote-build` or `deploy --local-build`. It creates a new deployment, leaving the original untouched. It defaults to preview; production requires `--prod` and production permission. A database or volume binding must belong to the selected stage. A configured migration command runs again, so it must be repeatable and backward-compatible.
 
 The CLI prints a request ID to stderr. If a request is interrupted, repeat with `--request-id THE_SAME_ID` to resume the same candidate rather than creating another. `--no-wait` returns the queued candidate; `inspect` and `logs` can observe it later. `retry` remains the command for resuming a failed candidate in place.
 
@@ -204,6 +204,36 @@ poteto env set API_KEY --file /secure/api-key.txt --target preview
 
 Then use `poteto deploy . --local-build --preview`. Web egress permits public IPv4 TCP ports 80/443 and the operator's DNS resolvers. Host access, private/reserved ranges, cloud metadata, arbitrary ports, IPv6 and cross-sandbox connections stay blocked. It is not a destination-domain allowlist: treat a web-enabled application as able to send its own data to public websites. Omitting the setting keeps the previous no-egress behavior. A web token does not grant environment editing or cleanup; the login options are independent. Missing platform support or permission fails preflight without creating a deployment or falling back to another runtime.
 
+## Build on the platform without installing Docker
+
+```sh
+poteto login
+poteto plan . --remote --preview --json
+poteto deploy . --remote-build --preview --url-only
+```
+
+Platform builds are available to every IF.Link account on hosted Poteto, with no per-project build allowlist. Upload a Node application with `package.json` and `package-lock.json`, a Dockerfile project, or static source with its build command and output directory. Personal source deployments use platform CI by default; `--remote-build` makes the choice explicit. Neither Docker nor Node is required on the uploading computer. Python 3.10+ is sufficient, including on Windows PowerShell.
+
+Each job boots a fresh KVM-backed CI VM, runs the locked npm install or Dockerfile, and destroys the VM afterwards. Runtime variables and deployment credentials are not sent to that VM. Only the validated static output or single `linux/amd64` image returns to the publishing server; the application still uses its normal runtime, sleep, database and release controls. Build containers cannot reach host services, private networks or cloud metadata. Public package registries are reachable during builds.
+
+Builds are serialized in a separate CI pool (2 vCPU / 4 GiB per VM, at most 64 accepted source builds across users, 20-minute job supervisor). Account deployment concurrency and storage limits still apply. Source is limited to 50 MiB compressed / 200 MiB expanded; output images retain the 128 MiB compressed / 512 MiB expanded limits. Use multi-stage builds for large dependencies. A full queue, failed build or oversized image reports an error; it never silently runs on the publishing host or changes production traffic.
+
+The durable FIFO queue survives API/worker restarts. `poteto queue` shows the selected project’s queued/running builds; `inspect` and deployment responses include the current queue position and aggregate counts, never another user’s project identifiers. Only one source build runs at a time, including when multiple general workers exist. Ready-made static previews use their separate fast lane. Each personal account retains its one-active-deployment quota so one user cannot fill the queue.
+
+Use `poteto logs DEPLOYMENT_ID --follow` to follow the build and `poteto cancel DEPLOYMENT_ID` to cancel your job. `--no-wait` lets the command return after upload while CI continues. `--remote-build`, `--local-build`, `--prebuilt` and `--prebuilt-image` are mutually exclusive. To publish production, use the same path with `--prod` and a production-scoped credential.
+
+### Connect a self-hosted platform to CI
+
+On an existing Linux KVM host with the IF.Lathe runner and Linux image installed, place this repository at `/opt/poteto-ci` and run `sudo sh scripts/install-platform-builder.sh`. It creates a separate `potetoci` worker, network namespace, and loopback-only build gateway (`127.0.0.1:21998`); it does not restart Lathe runners. `POTETO_CI_NODE`, `POTETO_CI_VM_MODULE` and `POTETO_CI_VM_IMAGE` select the installed IF.Lathe tools. No Docker socket is exposed to the worker. Keep `/var/lib/poteto-ci/api.token` private.
+
+Connect the execution host's `127.0.0.1:22998` to that gateway through a persistent, host-key-verified SSH tunnel. Use a tunnel-only account restricted to forwarding `127.0.0.1:21998`, not an operator login. Put the gateway token in a root-only file and merge this into the executor's existing configuration:
+
+```json
+{"platform_builder":{"url":"http://127.0.0.1:22998","token_file":"/etc/poteto-ci/api.token","result_url":"https://deploy.example.com"}}
+```
+
+Set `POTETO_CI_CALLBACK_ORIGIN` to the public API origin when installing CI. Give the publisher the same gateway key in `/etc/paas-publisher-ci.key` (root-owned, readable by the API service only). CI returns artifacts over job-scoped HTTPS in resumable 2 MiB parts; source downloads and result uploads use the public API, while the SSH connection carries only control messages. `result_read_url` may use the execution host’s loopback controller forward for the final local download. Deploy matching executor and publisher code, verify an isolated test build, then set `"platform_builds": true` in `/etc/paas-publisher-runtime.json`. Existing runtimes and native-build allowlists are unchanged. Disabling the flag stops new platform source admissions; drain current jobs before disconnecting CI. Rebuild after moving hosts, or export the retained normalized artifact using the existing encrypted backup path.
+
 ## Build and publish without compiling on the server
 
 ```sh
@@ -211,7 +241,7 @@ poteto plan . --preview --json
 poteto deploy . --local-build --preview --url-only
 ```
 
-`--local-build` builds on the client, checks the actual artifact against server permissions and quotas, then uploads only that artifact. Static projects use local npm; Node projects and Dockerfile projects use your Docker context to build a `linux/amd64` image. Dynamic projects need Docker Engine API 1.48+, Buildx and image support shown by `poteto doctor`; new personal projects have it, while legacy projects keep their `prebuilt_image_projects` opt-in. A failed local build or preflight creates no deployment and never falls back to server compilation. Ordinary `deploy` retains its existing source-build behavior.
+`--local-build` builds on the client, checks the actual artifact against server permissions and quotas, then uploads only that artifact. Static projects use local npm; Node projects and Dockerfile projects use your Docker context to build a `linux/amd64` image. Dynamic projects need Docker Engine API 1.48+, Buildx and image support shown by `poteto doctor`; new personal projects have it, while legacy projects keep their `prebuilt_image_projects` opt-in. A failed local build or preflight creates no deployment and never falls back to server compilation. Ordinary `deploy` uses platform CI for personal source projects when enabled; managed projects retain their established default.
 
 Build trusted projects only. The image context follows Poteto's upload exclusions, including `.env*`, credentials, `.git`, `.poteto` and `node_modules`. Build output goes to stderr; `--url-only` keeps stdout suitable for automation. Temporary image tags are removed after packaging; Docker's build cache remains for the next build. Use a local Docker context or an independent CI runner to keep compilation off the publishing server.
 
@@ -352,7 +382,7 @@ Snapshots containing native databases use `ovh-paas-platform/3` with logical Pos
 
 ## Trusted native builds on Linux
 
-Server-side source builds default to a disposable VM builder (KVM or explicitly configured TCG); ordinary personal projects use client-side builds instead. On a Linux/amd64 host with Docker and Buildx, an operator can enable the independent native driver for projects whose source, dependencies and uploaders are trusted. Tenant runtimes, data and routes still use their existing VM path. A login or scoped upload token does not make code trusted.
+Personal source builds use the separate platform CI when enabled; managed projects retain their established builder unless `--remote-build` is chosen. The older disposable VM and trusted native drivers remain independent. On a Linux/amd64 host with Docker and Buildx, an operator can enable the independent native driver for projects whose source, dependencies and uploaders are trusted. Tenant runtimes, data and routes still use their existing VM path. A login or scoped upload token does not make code trusted.
 
 Create one dedicated BuildKit builder per trusted project, using the configuration directory under the executor state root (default shown). Choose a vetted BuildKit image for your registry with the driver option `image=...` if the default is not reachable.
 

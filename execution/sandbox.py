@@ -285,10 +285,12 @@ def operation(root, config, release, body, build_status):
         driver = status.get("driver")
         if spec.get('outbound_network', 'none') != outbound:
             raise ValueError('Sandbox network policy does not match its owned build receipt')
-        if personal and (driver != 'prebuilt' or spec.get('personal_preview') is not True):
+        remote = driver == 'remote' and bool(config.get('platform_builder')) and spec.get('platform_build') is True
+        if personal and ((driver != 'prebuilt' and not remote) or spec.get('personal_preview') is not True):
             raise ValueError('Personal previews require an owned prebuilt image receipt')
         source = ((driver == "native" and spec.get("runtime") in {"node", "dockerfile"})
-                  or (driver == "prebuilt" and spec.get("runtime") == "image"))
+                  or (driver == "prebuilt" and spec.get("runtime") in {"image", "image-import"})
+                  or (remote and spec.get('runtime') in {'node', 'dockerfile'}))
         if not source or (spec.get("account_id"), spec.get("project_id"), status.get("state"),
                           status.get("image")) != (account, project, "succeeded", image):
             raise ValueError("Sandbox requires an owned, trusted native build or normalized prebuilt image")

@@ -182,14 +182,14 @@ class CLITests(unittest.TestCase):
                 plan = json.loads(out)
                 self.assertEqual(("vite", "static", "dist"), (plan["origin"], plan["runtime"], plan["public_directory"]))
                 api = client.return_value
-                api.request.side_effect = [{"id": "release", "upload_url": "/upload"}, None]
+                api.request.side_effect = [{"ok": True}, {"id": "release", "upload_url": "/upload"}, None]
                 api.wait.return_value = {"url": "https://preview.test"}
                 out, _ = self.invoke("deploy", root, "--project", "project", "--url-only")
                 self.assertEqual("https://preview.test", out.strip())
-                spec = api.request.call_args_list[0].args[2]
+                spec = api.request.call_args_list[1].args[2]
                 self.assertEqual({"runtime": "static", "build_command": "npm run build",
                                   "output_directory": "dist", "target": "preview"}, spec)
-                with tarfile.open(fileobj=io.BytesIO(api.request.call_args_list[1].args[2]), mode="r:gz") as archive:
+                with tarfile.open(fileobj=io.BytesIO(api.request.call_args_list[2].args[2]), mode="r:gz") as archive:
                     self.assertEqual(["index.html", "package-lock.json", "package.json"], archive.getnames())
             package = root / "package.json"
             original = package.read_text()

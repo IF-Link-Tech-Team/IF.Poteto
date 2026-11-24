@@ -32,6 +32,7 @@ class Settings:
     personal_production: bool = False
     personal_workspaces: bool = False
     preview_protection: bool = False
+    platform_builds: bool = False
 
     def __post_init__(self):
         if not valid_domain(self.domain):
@@ -54,6 +55,8 @@ class Settings:
             ):
                 raise ValueError(f'{name} must be a list of project IDs')
 
+        if type(self.platform_builds) is not bool:
+            raise ValueError('platform_builds must be a boolean')
         if type(self.static_source_builds) is not bool:
             raise ValueError('static_source_builds must be a boolean')
         if type(self.sandbox_web) is not bool:
@@ -84,14 +87,18 @@ class Settings:
         selection = self.static_artifacts
         return ((personal and self.personal_previews) or selection is True or (selection is not False and project in selection)) and (
             config['runtime'] == 'static' and (
-                not config.get('build_command') or self.static_source_builds or restored))
+                not config.get('build_command') or self.static_source_builds or self.platform_builds or restored))
+
+    def platform_build_enabled(self, config, *, personal=False):
+        source = config['runtime'] in {'node', 'dockerfile'} or (config['runtime'] == 'static' and config.get('build_command'))
+        return bool(self.platform_builds and source and (personal or config.get('build_mode') == 'platform'))
 
     def sandbox_enabled(self, project, config, *, personal=False):
         selected = personal and self.personal_previews
         target = config['target'] == 'preview' or (selected and self.personal_production and config['target'] == 'production')
         return ((selected or project in self.sandbox_projects) and target
                 and config['runtime'] in {'node', 'dockerfile', 'image'} and config['memory_mb'] >= 256
-                and (not selected or config['runtime'] == 'image')
+                and (not selected or config['runtime'] == 'image' or self.platform_build_enabled(config, personal=personal))
                 and (not config.get('sleep') or selected or project in self.sandbox_sleep_projects)
                 and not config.get('volume_id')
                 and (not config.get('database_id') or (selected and self.native_databases))
@@ -110,6 +117,7 @@ class Settings:
                    new_app_domain=os.environ.get("PAAS_NEW_APP_DOMAIN",options.get('new_app_domain')) or None,
                    static_artifacts=runtime.get('static_artifacts', False),
                    static_source_builds=runtime.get('static_source_builds', False),
+                   platform_builds=runtime.get('platform_builds', False),
                    sandbox_projects=runtime.get('sandbox_projects', ()),
                    sandbox_sleep_projects=runtime.get('sandbox_sleep_projects', ()),
                    prebuilt_image_projects=runtime.get('prebuilt_image_projects', ()),

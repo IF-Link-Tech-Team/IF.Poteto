@@ -1,4 +1,4 @@
-from contextlib import contextmanager
+from contextlib import contextmanager, closing
 import hashlib
 import json
 import os
@@ -21,6 +21,16 @@ def ident():
 
 def encode(value):
     return json.dumps(value, separators=(",", ":"), sort_keys=True)
+
+
+BUILD_QUEUE_LIMIT = 64
+
+
+def source_job(alias):
+    return f"""EXISTS (SELECT 1 FROM deployments d WHERE d.id={alias}.deployment_id
+        AND (json_extract(d.config,'$.runtime') IN ('node','dockerfile')
+             OR (json_extract(d.config,'$.runtime')='static'
+                 AND coalesce(json_extract(d.config,'$.build_command'),'')!='')))"""
 
 
 PREVIEW_SCOPE = "deployments:preview"
@@ -432,15 +442,22 @@ class Store:
     def deployment_preconditions(self, db, actor, project, config):
         project_id = project['id']
         personal = project['preview_mode'] == 'isolated'
+        platform_build = self.settings.platform_build_enabled(config, personal=personal)
+        if config.get('build_mode') == 'platform' and not self.settings.platform_builds:
+            raise Problem(503, 'Platform builds are unavailable; use poteto deploy --local-build')
         if personal:
             if not self.settings.personal_previews:
                 raise Problem(503, 'The personal preview runtime is temporarily disabled')
-            if config['runtime'] not in {'static', 'image'} or config.get('build_command'):
+            if (config['runtime'] not in {'static', 'image'} or config.get('build_command')) and not platform_build:
                 raise Problem(422, 'Build this personal project on your computer or CI with poteto deploy --local-build')
-            if config['runtime'] == 'image' and not self.settings.sandbox_enabled(project_id, config, personal=True):
+            if (config['runtime'] == 'image' or (platform_build and config['runtime'] != 'static')) and not self.settings.sandbox_enabled(project_id, config, personal=True):
                 raise Problem(422, 'Personal images need at least 256 MiB and an enabled target; only enabled native database bindings are supported')
         if config['runtime'] == 'image' and not personal and project_id not in self.settings.prebuilt_image_projects:
             raise Problem(403, "Prebuilt image deployment is not enabled for this project")
+        if platform_build:
+            pending = db.execute("SELECT count(*) FROM deployments d WHERE d.state IN ('uploading','queued','building','migrating','deploying') AND (json_extract(d.config,'$.runtime') IN ('node','dockerfile') OR coalesce(json_extract(d.config,'$.build_command'),'')!='')").fetchone()[0]
+            if pending >= BUILD_QUEUE_LIMIT:
+                raise Problem(429, 'Platform build queue is full (64 pending builds); retry later')
         account = self.check_concurrency(db, actor)
         driver = None
         if self.settings.artifact_enabled(project_id, config, personal=personal):
@@ -476,7 +493,8 @@ class Store:
                 raise Problem(413, "Estimated normalized image exceeds the image archive limit")
             used = self.storage_used(db, actor['account_id'])
             limit = account['max_storage']
-            estimate = normalized_image_bytes or 0
+            platform_build = self.settings.platform_build_enabled(config, personal=project['preview_mode'] == 'isolated')
+            estimate = ARCHIVE_LIMIT if platform_build and config['runtime'] != 'static' else normalized_image_bytes or 0
             required = archive_bytes + unpacked_bytes + estimate
             if used + required > limit:
                 def mib(size):
@@ -490,11 +508,12 @@ class Store:
                               "Use a smaller image or request more account storage before uploading.")
             return {"ok": True, "project_id": project_id, "target": config['target'], "runtime_driver": driver,
                     "preview_mode": project['preview_mode'], "configuration": config,
+                    "build_location": 'platform' if platform_build else ('none' if config['runtime'] == 'image' or (config['runtime'] == 'static' and not config.get('build_command')) else 'executor'),
                     "upload": {"archive_bytes": archive_bytes, "unpacked_bytes": unpacked_bytes, "files": files,
                                "limit_bytes": upload_limit, "expansion_limit_bytes": unpack_limit, "file_limit": file_limit},
                     "storage": {"used_bytes": used, "limit_bytes": account['max_storage'],
                                 "remaining_after_upload": limit - used - archive_bytes - unpacked_bytes,
-                                "estimated_normalized_image_bytes": normalized_image_bytes,
+                                "estimated_normalized_image_bytes": estimate if platform_build else normalized_image_bytes,
                                 "required_bytes": required, "remaining_after_deploy_estimate": limit - used - required},
                     "checked_at": time.time()}
 
@@ -519,7 +538,7 @@ class Store:
     def configuration(self, actor, project_id, model):
         with self.connection() as db:
             project = self.project(db, actor, project_id, 'deployments:write', allow_preview=model.target == 'preview')
-        defaults = {'cpus': 0.1, 'sleep': True} if project['preview_mode'] == 'isolated' and model.runtime == 'image' else {}
+        defaults = {'cpus': 0.1, 'sleep': True} if project['preview_mode'] == 'isolated' and model.runtime in {'image', 'node', 'dockerfile'} else {}
         return model.configuration(defaults=defaults)
 
     def environment_project(self, db, actor, project_id, target):
@@ -584,7 +603,7 @@ class Store:
             row = db.execute("SELECT p.account_id,a.max_storage,d.built_bytes,d.runtime_driver,d.config FROM deployments d "
                              "JOIN projects p ON p.id=d.project_id JOIN accounts a ON a.id=p.account_id "
                              "WHERE d.id=?", (deployment_id,)).fetchone()
-            if row is None or not (json.loads(row['config'])['runtime'] == 'image' if image else
+            if row is None or not (json.loads(row['config'])['runtime'] in {'image', 'node', 'dockerfile'} if image else
                                    row['runtime_driver'] == ARTIFACT_DRIVER):
                 raise Problem(409, "Release no longer owns this artifact")
             if self.storage_used(db, row['account_id']) - row['built_bytes'] + size > row['max_storage']:
@@ -605,13 +624,33 @@ class Store:
             reserved = db.execute("SELECT size FROM source_uploads WHERE deployment_id=?", (deployment_id,)).fetchone()
             if reserved:
                 used -= reserved["size"]
-            if used + size + unpacked_bytes > account["max_storage"]:
+            from publisher.image_contract import ARCHIVE_LIMIT
+            config = json.loads(deployment['config'])
+            platform_build = self.settings.platform_build_enabled(config, personal=deployment['preview_mode'] == 'isolated')
+            reserve = ARCHIVE_LIMIT if platform_build and config['runtime'] != 'static' else 0
+            if used + size + unpacked_bytes + reserve > account["max_storage"]:
                 raise Problem(429, "Artifact storage quota reached")
             path.replace(self.settings.root / "artifacts" / f"{deployment_id}.tar.gz")
             now = time.time()
-            db.execute("UPDATE deployments SET state='queued', artifact_bytes=?, unpacked_bytes=?, updated=? WHERE id=?", (size, unpacked_bytes, now, deployment_id))
+            db.execute("UPDATE deployments SET state='queued', artifact_bytes=?, unpacked_bytes=?, built_bytes=?, updated=? WHERE id=?", (size, unpacked_bytes, reserve, now, deployment_id))
             db.execute("INSERT INTO jobs(id,project_id,kind,deployment_id,created,updated) VALUES(?,?,?,?,?,?)", (ident(), deployment["project_id"], "deploy", deployment_id, now, now))
             self.audit(db, actor, "deployment.upload", deployment_id)
+
+    def build_queue(self, deployment_id):
+        # release_view also runs inside write transactions; this read-only
+        # snapshot must not acquire a second writer lock.
+        with closing(sqlite3.connect(self.settings.db, timeout=15)) as db:
+            db.row_factory = sqlite3.Row
+            db.execute("BEGIN")
+            job = db.execute("SELECT j.* FROM jobs j WHERE j.deployment_id=? AND j.kind='deploy' AND " +
+                             source_job('j') + " ORDER BY j.created DESC,j.id DESC LIMIT 1", (deployment_id,)).fetchone()
+            if job is None or job['state'] not in {'queued', 'running'}:
+                return None
+            waiting = db.execute("SELECT count(*) FROM jobs j WHERE j.kind='deploy' AND j.state='queued' AND " + source_job('j')).fetchone()[0]
+            active = db.execute("SELECT count(*) FROM jobs j WHERE j.kind='deploy' AND j.state='running' AND j.lease_until>=? AND " + source_job('j'), (time.time(),)).fetchone()[0]
+            ahead = db.execute("SELECT count(*) FROM jobs j WHERE j.kind='deploy' AND j.state='queued' AND (j.created<? OR (j.created=? AND j.id<?)) AND " + source_job('j'), (job['created'], job['created'], job['id'])).fetchone()[0]
+            return {'state': job['state'], 'position': ahead+1 if job['state']=='queued' else 0,
+                    'waiting': waiting, 'running': active, 'concurrency': 1, 'limit': BUILD_QUEUE_LIMIT}
 
     def claim(self, owner, *, logs_only=False, static_previews_only=False):
         if logs_only and static_previews_only:
@@ -633,10 +672,15 @@ class Store:
                 AND current.id!=j.id AND current.kind!='runtime-logs'
                 AND current.state='running' AND current.lease_until>=?)"""
             params.append(now)
+        if not logs_only:
+            # A process restart or an additional general worker must not start
+            # concurrent source builds. Static artifacts retain their fast lane.
+            lane += " AND (j.kind!='deploy' OR NOT " + source_job('j') + " OR NOT EXISTS (SELECT 1 FROM jobs active WHERE active.kind='deploy' AND active.id!=j.id AND active.state='running' AND active.lease_until>=? AND " + source_job('active') + "))"
+            params.append(now)
         with self.connection() as db:
             job = db.execute("SELECT j.* FROM jobs j WHERE ((j.state='queued' AND coalesce(j.lease_until,0)<?) "
                              "OR (j.state='running' AND j.lease_until<?)) AND " + lane +
-                             " ORDER BY j.created LIMIT 1", params).fetchone()
+                             " ORDER BY j.created,j.id LIMIT 1", params).fetchone()
             if not job:
                 return None
             db.execute("UPDATE jobs SET state='running',owner=?,lease_until=?,attempts=attempts+1,updated=? WHERE id=?", (owner, now + 90, now, job["id"]))

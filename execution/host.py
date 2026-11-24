@@ -623,11 +623,15 @@ def run_build(build_id):
                     stop_native_build(build_id)
             elif driver == 'vm':
                 result = build_in_vm(build_id, job, spec)
+            elif driver == 'remote':
+                from execution import remote_build
+                result = remote_build.build(config['platform_builder'], job, spec)
             elif driver == 'prebuilt':
-                if spec.get('runtime') != 'image':
+                if spec.get('runtime') not in {'image', 'image-import'}:
                     raise ExecutionError('Invalid prebuilt image specification')
                 admit_space(incoming=3 * prebuilt_image.IMAGE_LIMIT + 4 * 1024**2)
-                result = prebuilt_image.normalize(job / 'source.tar.gz', job / 'image.tar', build_id)
+                normalize = prebuilt_image.normalize_saved if spec['runtime'] == 'image-import' else prebuilt_image.normalize
+                result = normalize(job / 'source.tar.gz', job / 'image.tar', build_id)
                 (job / 'build.log').write_text('Validated linux/amd64 image; no server build or builder VM\n')
             else:
                 raise ExecutionError('Unknown build driver')
@@ -653,6 +657,11 @@ def finish_build(build_id):
         except BlockingIOError:
             return
         stop_native_build(build_id)
+        job = ROOT / 'builds' / build_id
+        if (job / 'spec.json').exists() and json.loads((job / 'spec.json').read_text()).get('platform_build'):
+            from execution import remote_build
+            config = json.loads((ROOT / 'config.json').read_text())
+            remote_build.finish(config['platform_builder'], build_id, json.loads((job / 'spec.json').read_text())['account_id'])
         active = ROOT / 'active-build'
         if active.exists() and active.read_text() == build_id:
             systemctl('stop', 'paas-builder.service')
@@ -1054,7 +1063,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             leases.enter_context(active_account(spec["account_id"]))
             if 'project_id' in spec:
                 checked_id(spec['project_id'])
+            platform_build = spec.get('platform_build', False)
+            if type(platform_build) is not bool:
+                raise ValueError('Invalid platform build requirement')
+            if platform_build and not json.loads((ROOT / 'config.json').read_text()).get('platform_builder'):
+                raise ExecutionError('Platform build service is unavailable')
             require_native = spec.get('require_native', False)
+            if platform_build and require_native:
+                raise ValueError('Choose platform or native build, not both')
             if type(require_native) is not bool:
                 raise ValueError('Invalid native build requirement')
             output_kind = spec.get("output_kind", "image")
@@ -1096,10 +1112,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     else:
                         config_path = ROOT / 'config.json'
                         config = json.loads(config_path.read_text()) if config_path.exists() else {}
-                        if spec.get('runtime') == 'image':
+                        if spec.get('runtime') == 'image' or (spec.get('runtime') == 'image-import' and spec.get('personal_preview') is True and config.get('personal_previews') is True):
                             driver = 'prebuilt'
                         else:
-                            driver = 'native' if output_kind == "image" and native_build.allowed(config, spec) else 'vm'
+                            driver = 'remote' if platform_build else ('native' if output_kind == "image" and native_build.allowed(config, spec) else 'vm')
                         if require_native and driver != 'native':
                             raise ExecutionError('Project is no longer authorized for native builds')
                         pending.replace(job / "source.tar.gz")

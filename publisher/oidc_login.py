@@ -87,6 +87,7 @@ class CliLogin:
         def config():
             return {"issuer": ISSUER, "client_id": self.client_id, "preview_management": True,
                     "preview_environment": True, "web_egress": store.settings.sandbox_web,
+                    "platform_builds": store.settings.platform_builds,
                     "preview_data": store.settings.native_databases,
                     "production_publishing": store.settings.personal_production and store.settings.personal_previews,
                     'project_selection': store.settings.personal_workspaces and store.settings.personal_previews,

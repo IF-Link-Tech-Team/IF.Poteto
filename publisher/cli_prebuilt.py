@@ -117,7 +117,7 @@ def build_local(directory: Path, config: Path | None, credential_file: Path | st
         raise PlanError("invalid_artifact", "The output file cannot also be the credential file.")
     artifact.unlink(missing_ok=True)
     if not shutil.which("docker"):
-        raise PlanError("missing_docker", "Install and start Docker with Buildx to build a Linux image on this client.")
+        raise PlanError("missing_docker", "Local builds need Docker with Buildx. Use poteto deploy . --remote-build --preview to build on the platform without Docker.")
     print("Building linux/amd64 using your Docker context; no Poteto server build.", file=sys.stderr)
     reference = "poteto-local:" + uuid.uuid4().hex
     with tempfile.TemporaryDirectory(prefix="poteto-build-") as temporary:

@@ -21,6 +21,6 @@ class DocumentationDistributionTests(unittest.TestCase):
             self.assertIn('href="/README.md"', page)
             self.assertIn("poteto project alias my-blog", page)
             skill = (out / "skills/poteto-deploy/SKILL.md").read_text()
-            self.assertIn("Poteto 0.23.0 或更新版本", skill)
+            self.assertIn("Poteto 0.25.0 或更新版本", skill)
             self.assertIn('poteto deploy "$APP_DIR" --local-build --prod --url-only', skill)
             self.assertIn("运行内存至少 256 MiB", skill)

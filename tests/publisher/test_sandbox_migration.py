@@ -74,6 +74,19 @@ class SandboxMigrationTests(unittest.TestCase):
             migration.operation(self.root,config,self.release,self.request(),Mock(return_value={'driver':'native'}))
         create.assert_not_called()
 
+    def test_owned_normalized_ci_image_can_run_the_database_migration(self):
+        source = self.root/'builds'/self.release; source.mkdir(parents=True)
+        (source/'spec.json').write_text(json.dumps({'account_id': self.account, 'project_id': self.project,
+            'runtime': 'node', 'personal_preview': True, 'platform_build': True}))
+        status = Mock(return_value={'driver': 'remote', 'state': 'succeeded', 'image': 'paas-release:'+self.release})
+        config = {'personal_previews': True, 'native_databases': True, 'platform_builder': {'url': 'private'}}
+        with patch.object(migration, 'binding', side_effect=RuntimeError('validated-ci-image')):
+            with self.assertRaisesRegex(RuntimeError, 'validated-ci-image'):
+                migration.operation(self.root, config, self.release, self.request(), status)
+        config.pop('platform_builder')
+        with self.assertRaisesRegex(ValueError, 'prebuilt image'):
+            migration.operation(self.root, config, self.release, self.request(), status)
+
     def test_timeout_marks_failure_and_stops_the_actual_container(self):
         self.save()
         states=[{'State':{'Running':False}}, {'State':{'Running':True}}]

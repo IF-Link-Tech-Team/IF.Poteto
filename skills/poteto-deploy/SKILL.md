@@ -9,7 +9,7 @@ description: 用 Poteto CLI 把现有应用目录预检并发布到 Poteto 的 H
 
 ## 安装与凭据
 
-如果没有可用的 Poteto 0.23.0 或更新版本，从官方地址安装。需要 Python 3.10+，不需要管理员权限。安装到用户路径，或为任务设置独立的 `POTETO_INSTALL_DIR`，用该目录下的 `poteto` 执行后续命令。
+如果没有可用的 Poteto 0.25.0 或更新版本，从官方地址安装。需要 Python 3.10+，不需要管理员权限。安装到用户路径，或为任务设置独立的 `POTETO_INSTALL_DIR`，用该目录下的 `poteto` 执行后续命令。
 
 ```sh
 curl -fsSL https://poteto.iflink.tech/install.sh | sh
@@ -33,14 +33,17 @@ irm https://poteto.iflink.tech/install.ps1 | iex
 
 ```sh
 poteto plan "$APP_DIR" --preview --json
-poteto deploy "$APP_DIR" --local-build --project "$PROJECT_ID" --preview --url-only
+poteto plan "$APP_DIR" --remote --project "$PROJECT_ID" --preview --json
+poteto deploy "$APP_DIR" --remote-build --project "$PROJECT_ID" --preview --url-only
 ```
 
 先确认 `plan` 返回 `ok: true`，检查 `runtime`、`public_directory` 和构建/启动命令；如果需要 `--config`，在两个命令上用同一个文件。确认是应用目录或成品目录，而不是包含其他项目或私有文件的上层目录。本地预检不执行构建，也不需要登录。
 
-**默认把构建放在用户电脑或独立 CI，不放在 Poteto 发布服务器上。** `--local-build` 在客户端构建后自动检查成品的服务端权限、运行额度和数据绑定，检查通过才上传；失败不会自动改走服务器编译。静态项目使用本地 npm，Node/Dockerfile 使用当前 Docker context 构建 `linux/amd64` 镜像。Dockerfile 中的应用文件须可被 UID 10001 读取；不要放在运行时会覆盖的 `/tmp`，根文件系统为只读。确认该 context 不是发布服务器；只构建可信项目。动态镜像需要 Docker Engine API 1.48+、Buildx 和项目已有镜像权限，没有这些条件时先说明缺项，不擅自改用服务器构建。
+**默认使用平台 CI，不要求用户安装 Docker。** `--remote-build` 先检查权限、配额和绑定，再上传源码；平台在一次性 KVM CI 虚拟机中执行 npm 或 Dockerfile，运行时变量和部署 token 不进入构建机。个人项目不加构建选项时也默认用平台 CI。`doctor` 的 `capabilities.platform_builds.enabled` 表示服务端能力。平台不支持时说明缺项，不擅自更换平台或扩大权限。
 
-**静态站优先在本机或 CI 构建。** 对可信的 npm 项目，`poteto build` 会按锁文件安装依赖并执行项目的构建脚本。Vite 需要时在构建命令上加 `--preset vite`；其他静态 npm 项目可在 `poteto.json` 指定 `build_command` 和 `output_directory`。构建和预检不需要登录，不要把私密配置编进浏览器资产。
+用户明确选择本机构建时用 `--local-build`；静态项目需要本地 npm，Node/Dockerfile 需要 Docker Engine API 1.48+ 和 Buildx。该模式失败不自动切换平台构建。两种模式与 `--prebuilt` / `--prebuilt-image` 互斥。Dockerfile 中的应用文件须可被 UID 10001 读取；不要放在运行时会覆盖的 `/tmp`，根文件系统为只读。保留用户的构建选择。
+
+**已有静态成品直接上传；需要构建时可选平台 CI。** 对可信的 npm 项目，`poteto build` 会按锁文件安装依赖并执行项目的构建脚本。Vite 需要时在构建命令上加 `--preset vite`；其他静态 npm 项目可在 `poteto.json` 指定 `build_command` 和 `output_directory`。构建和预检不需要登录，不要把私密配置编进浏览器资产。
 
 ```sh
 poteto build "$APP_DIR"
@@ -50,15 +53,15 @@ poteto deploy "$APP_DIR" --prebuilt --project "$PROJECT_ID" --preview --url-only
 
 已有含 `index.html` 的静态成品（例如 `dist/`）时，可以直接部署该目录。如果用 `--prebuilt`，先运行 `poteto build dist/` 生成归档，再对同一个 `dist/` 执行上面的预检和部署命令；`--prebuilt` 不会现场打包。
 
-同一账号只有一个并发发布槽时，串行执行多条部署：等上一条返回就绪链接，再预检和部署下一条。遇到并发 429 时查看 `poteto usage` 和正在运行的发布，不重复提交。
+平台构建使用持久化 FIFO 队列，一次一个，最多接受 64 条源码发布；`poteto queue` 查看当前项目队列，`inspect` 显示位置。队列中可用 `poteto cancel ID` 取消自己的发布。就绪静态成品不被构建队列阻塞。同一账号只有一个并发发布槽时，串行执行多条部署：等上一条返回就绪链接，再预检和部署下一条。遇到并发 429 时查看 `poteto usage` 和正在运行的发布，不重复提交。
 
 **动态应用分步构建时：** `poteto build "$APP_DIR"` 可构建 Node 或 Dockerfile 项目；已有可信镜像时用 `poteto build "$APP_DIR" --from-image "$IMAGE"`，不会重建。对同一个应用目录，在 `plan` 和 `deploy` 上都传 `--prebuilt-image "$APP_DIR/.poteto/image.tar.gz"`，预检加 `--remote --project "$PROJECT_ID"`，并继续用 `--preview`。镜像上限为压缩 128 MiB、展开 512 MiB；Next.js 等框架优先用多阶段 Dockerfile 和 standalone 产物。不要把凭据、运行时密钥或数据库内容打进镜像。先以 `poteto doctor` / 远端预检确认项目能力；新版新注册个人项目可默认接收镜像，旧托管项目仍按原开通策略。未开通时说明缺项，不反复提交。
 
-远端预检的 `runtime_driver: "gvisor"` 表示平台将直接启动隔离容器，不使用构建 VM 或租户 VM。新个人项目默认可用，运行内存至少 256 MiB；支持原生数据库的平台还可绑定预览 PostgreSQL 并执行迁移，持久卷仍需托管项目。旧项目仍需平台开通。新个人项目默认休眠，旧项目需开通 `sandbox_sleep_projects`；`sleep: true` 会由 Sablier 在空闲后停止、访问时等待健康检查再唤醒。沿用应用的实际需求，不为选用此通道删除数据绑定。配额满或隔离启动失败时处理错误，不退回无隔离运行。
+远端预检的 `runtime_driver: "gvisor"` 表示运行阶段使用隔离容器、不使用租户 VM；平台源码构建仍使用一次性 CI VM，预构建镜像则无需构建 VM。新个人项目默认可用，运行内存至少 256 MiB；支持原生数据库的平台还可绑定预览 PostgreSQL 并执行迁移，持久卷仍需托管项目。旧项目仍需平台开通。新个人项目默认休眠，旧项目需开通 `sandbox_sleep_projects`；`sleep: true` 会由 Sablier 在空闲后停止、访问时等待健康检查再唤醒。沿用应用的实际需求，不为选用此通道删除数据绑定。配额满或隔离启动失败时处理错误，不退回无隔离运行。
 
 - Node 源码构建需要 npm 锁文件。动态应用须监听 `0.0.0.0` 上平台提供的 `PORT`；非 npm 构建可以使用 Dockerfile。预览数据库或卷由项目所有者预先创建和授权，沿用已有绑定。
 - CLI 0.12.0 配合新版服务端会自动分片上传，并在当前应用的 `.poteto/` 保存不含凭据的待上传成品。若上传中断，在同一目录执行 `poteto deploy . --project "$PROJECT_ID" --resume <发布 ID>`，沿用输出中的 ID；不要重新构建、添加 `--local-build`、更换目标或创建另一个发布。收到服务端已入队确认后，本地待上传副本会自动删除。0.22.1 起会对 EdgeOne 522/524 和短暂断线查询已确认偏移后有限重试；证书验证或权限错误不会重试。
-- 镜像远端预检会把上传包、解开外层归档后的文件和预计归一化镜像一起计入账号制品存储。读 `remote.storage.required_bytes` 和 `remaining_after_deploy_estimate`；存储 429 会给出缺口，在上传前缩小镜像或请管理员增加额度。新个人账号默认 1 GiB 制品总额度；托管平台的现有启用 IF.Link 个人账号也已提升到至少 1 GiB，更高额度保留。单镜像限制仍是压缩 128 MiB、展开 512 MiB。
+- 平台源码预检预留归一化镜像上限 516 MiB，完成后按实际大小记账；镜像远端预检会把上传包、解开外层归档后的文件和预计归一化镜像一起计入账号制品存储。读 `remote.storage.required_bytes` 和 `remaining_after_deploy_estimate`；存储 429 会给出缺口，在上传前缩小镜像或请管理员增加额度。新个人账号默认 1 GiB 制品总额度；托管平台的现有启用 IF.Link 个人账号也已提升到至少 1 GiB，更高额度保留。单镜像限制仍是压缩 128 MiB、展开 512 MiB。
 - 预检失败时按 JSON 的 `error.code` 和 `error.message` 处理；不要绕过预检或改用生产发布。上传后失败时用 `poteto deployments --project "$PROJECT_ID"` 和 `poteto logs <发布 ID>` 定位，不盲目重复创建发布。
 
 只在 `deploy` 成功且返回的 HTTPS 地址可访问后，才交付预览链接。验证首页或应用实际配置的健康检查路径；验证共享数据时优先使用只读请求。不要把 token 或环境变量值放进回复。
@@ -67,7 +70,7 @@ poteto deploy "$APP_DIR" --prebuilt --project "$PROJECT_ID" --preview --url-only
 
 排查已部署应用的 stdout/stderr 用 `poteto logs <预览 URL> --runtime`；持续观察加 `--follow --timeout 60`，不要无限挂起 Agent。加 `--jsonl` 可逐条解析游标，断线后用同一部署的 `--after <cursor>` 续读；`--tail 0` 从新日志开始。读取不会唤醒休眠应用。平台只保留最多 200 条 / 64 KiB，出现 gap 表示日志已轮转或窗口已过，不要把缺失输出解释为没有错误。
 
-Next.js / Vite 项目可在预检和部署时同时加 `--preset nextjs` / `--preset vite`，或在 `poteto.json` 指定 `preset`。保留已有目录和锁文件。只有用户明确选择服务器源码构建时，才省略 `--local-build`。预览变量操作需用户已授予的 `previews:env` 或管理凭据 `env:write`，不要擅自扩权；`poteto redeploy <预览 URL> --preview --url-only` 使用已保存的构建方式，预构建镜像复用成品，源码发布会在服务器重建。请求中断时沿用 stderr 中的 `--request-id`，不要重新生成请求。
+Next.js / Vite 项目可在预检和部署时同时加 `--preset nextjs` / `--preset vite`，或在 `poteto.json` 指定 `preset`。保留已有目录和锁文件。平台构建用 `--remote-build`，用户选定本机构建时保留 `--local-build`。预览变量操作需用户已授予的 `previews:env` 或管理凭据 `env:write`，不要擅自扩权；`poteto redeploy <预览 URL> --preview --url-only` 使用已保存的构建方式，预构建镜像复用成品，源码发布会在服务器重建。请求中断时沿用 stderr 中的 `--request-id`，不要重新生成请求。
 
 ## 项目固定地址
 
@@ -89,7 +92,7 @@ Poteto 0.23.0 支持项目别名，例如 `my-blog.page.iflink.tech`。用 `pote
 
 `poteto retention status --project "$PROJECT_ID" --json` 可检查自动保留策略和最近任务。默认关闭；`retention set --older-than-days 7 --keep 3` 也只是预检。只有用户明确授权持续清理该项目的过期预览时，才可用项目管理凭据加 `--yes` 保存；一次性删除几个 ID 的授权不能用来启用自动策略。策略保留至少一个就绪预览，沿用生产、回滚历史、数据绑定保护。删除不可恢复；失败任务应检查后按原 ID 手动重试。`retention disable` 阻止尚未开始的清理，已开始的删除会安全完成。
 
-新个人项目若显示 `preview_mode: "isolated"`，只接收本地构建的静态成品或预览镜像，不会退回服务器源码编译或租户 VM。镜像默认 256 MiB、0.1 vCPU、自动休眠；以远端预检的 `configuration` 为准，保留用户显式配置。数据库能力以 `capabilities.preview_database` 和远端预检为准；不支持持久卷，不要为进入通道删除真实需求。出站网络默认关闭；外部 API 需求按下节检查，PostgreSQL 需求按下节处理，持久卷沿用已支持的托管项目。
+新个人项目若显示 `preview_mode: "isolated"`，可直接接收静态成品、预构建镜像；平台启用 `platform_builds` 时也接受 Node、Dockerfile 和静态源码，由隔离 CI 构建，不使用发布宿主机 Docker 或租户 VM。镜像默认 256 MiB、0.1 vCPU、自动休眠；以远端预检的 `configuration` 为准，保留用户显式配置。数据库能力以 `capabilities.preview_database` 和远端预检为准；不支持持久卷，不要为进入通道删除真实需求。出站网络默认关闭；外部 API 需求按下节检查，PostgreSQL 需求按下节处理，持久卷沿用已支持的托管项目。
 
 
 ## 外部 API 和预览环境变量
@@ -130,7 +133,7 @@ poteto import create "$EMPTY_PROJECT_ID" /secure/preview.zip.age --identity /sec
 
 先用 `poteto doctor` 确认 `capabilities.production.enabled` 与 `authorized`，并核对目标项目。没有权限时请用户选择是否以 `poteto login --production --output /secure/production.json` 单独授权，不自行重新登录或换用管理员 token。生产凭据允许该项目的发布、回滚、清理非当前版本以及配置中显式申请的外网访问；环境、数据库、备份和项目删除另需用户明确选择 `--manage-project`。它不授予账号管理、其他项目或 token 签发权。生产模式不能混用预览专用登录选项；保留原预览 Agent 凭据。
 
-沿用前面本地构建或预构建成品的流程，只将目标改为 `--prod`。Dockerfile 项目无需提前打包：
+沿用前面平台构建、本地构建或预构建成品的选择，只将目标改为 `--prod`。平台构建可运行 `poteto deploy "$APP_DIR" --remote-build --prod --url-only`。Dockerfile 项目无需提前打包：
 
 ```sh
 poteto plan "$APP_DIR" --prod --json

@@ -89,6 +89,7 @@ class Client:
             raise RuntimeError(expired)
 
         previous = None
+        previous_queue = None
         cursor = 0
         while time.monotonic() < deadline:
             release = observe('/v1/deployments/' + release_id)
@@ -105,6 +106,11 @@ class Client:
             if release["state"] != previous:
                 print(release["state"], file=sys.stderr)
                 previous = release["state"]
+            queue = release.get('queue') or {}
+            position = queue.get('position') if queue.get('state') == 'queued' else None
+            if position is not None and position != previous_queue:
+                print(f'Queued for platform build: position {position} ({queue.get("running", 0)} building)', file=sys.stderr)
+            previous_queue = position
             if release["state"] in {"ready", "failed", "cancelled"}:
                 if release["state"] != "ready":
                     raise RuntimeError(release["error"] or "Deployment did not become ready")
@@ -425,6 +431,7 @@ def main(prog="poteto"):
         deploy.add_argument("--preset", choices=["nextjs", "vite"])
         deploy.add_argument("--resume", metavar="DEPLOYMENT", help="Resume this directory's saved upload without rebuilding or creating a release")
         artifact = deploy.add_mutually_exclusive_group()
+        artifact.add_argument("--remote-build", action="store_true", help="Upload source and build in the platform CI; no local Docker needed")
         artifact.add_argument("--local-build", action="store_true", help="Build on this client, preflight and upload only the result")
         artifact.add_argument("--prebuilt", action="store_true", help="Upload only the static artifact from poteto build")
         artifact.add_argument("--prebuilt-image", type=Path, metavar="ARCHIVE", help="Publish a packaged Docker image without building")
@@ -445,6 +452,8 @@ def main(prog="poteto"):
     redeploy.add_argument("--timeout", type=int, default=900)
     deployments = commands.add_parser("deployments", aliases=["ls"], help="List releases in the current project")
     deployments.add_argument("--project", help="Project ID (defaults to the project from poteto login)")
+    queue = commands.add_parser('queue', help='Show queued and running source builds visible in the selected project')
+    queue.add_argument('--project', help='Project ID (defaults to the directory link or login)')
     status = commands.add_parser("status", aliases=["inspect"], help="Inspect a deployment ID or Poteto URL")
     status.add_argument("deployment")
     logs = commands.add_parser("logs")
@@ -496,7 +505,7 @@ def main(prog="poteto"):
             parser.error('Automatic retention requires --keep 1..100 and --older-than-days 1..3650')
     if args.command == 'protection' and args.protection_action in {'enable','rotate'}:
         if args.output.suffix!='.poteto-key':parser.error('Save preview access credentials in a .poteto-key file')
-    if getattr(args, "resume", None) and any((args.local_build, args.prebuilt, args.prebuilt_image,
+    if getattr(args, "resume", None) and any((args.local_build, args.remote_build, args.prebuilt, args.prebuilt_image,
                                                args.preset, args.config, args.prod, args.preview)):
         parser.error("--resume reuses the saved artifact and target; omit build, configuration and target flags")
     if getattr(args, "prebuilt", False) and (args.config is not None or args.preset):
@@ -734,6 +743,8 @@ def main(prog="poteto"):
                 prepared = plan_deployment(args.directory, args.config, token_file, preview=args.preview,
                                            production=args.prod, preset=args.preset)
                 config = prepared.config
+                if args.remote_build:
+                    config['build_mode'] = 'platform'
                 source = pack(prepared.directory, files=prepared.files)
             if not resuming and args.prod:
                 config["target"] = "production"
@@ -745,6 +756,11 @@ def main(prog="poteto"):
             if not resuming:
                 if prog != "paas" and (args.local_build or args.prebuilt_image):
                     _preflight_artifact(client, project_id, config, report, source)
+                elif prog != 'paas' and not args.prebuilt and (config.get('runtime') in {'node', 'dockerfile'} or config.get('build_command') or args.remote_build):
+                    client.request('POST', f'/v1/projects/{project_id}/preflight', {
+                        'configuration': config, 'archive_bytes': len(source),
+                        'unpacked_bytes': sum((prepared.directory / name).stat().st_size for name in prepared.files),
+                        'files': len(prepared.files)})
                 result = client.request("POST", f"/v1/projects/{project_id}/deployments", config)
             resumable = resuming or result.get("resumable_upload_url")
             if resumable and not resuming:
@@ -780,11 +796,13 @@ def main(prog="poteto"):
             if args.url_only:
                 print(result["production_url"] if args.prod else result["url"])
                 return
-        elif args.command == "deployments":
+        elif args.command in {"deployments", "queue"}:
             project_id = args.project
             if not project_id:
-                parser.error("deployments requires --project PROJECT_ID when using a manual token")
+                parser.error(args.command + " requires --project PROJECT_ID when using a manual token")
             result = client.request("GET", f"/v1/projects/{project_id}/deployments")
+            if args.command == 'queue':
+                result = [release for release in result if release.get('queue') is not None]
         elif args.command=='logs' and args.runtime:
             result=cli_logs.runtime(client,args.deployment,follow=args.follow,timeout=args.timeout,
                                     tail=args.tail,after=args.after,jsonl=args.jsonl)

@@ -14,6 +14,7 @@ class ProjectInput(Input):
 class DeploymentInput(Input):
     runtime: Literal["static", "node", "dockerfile", "image"] = "static"
     target: Literal["production", "preview"] = "production"
+    build_mode: Literal["platform"] | None = None
     build_command: str | None = Field(default=None, max_length=2000)
     start_command: str | None = Field(default=None, max_length=2000)
     output_directory: str = "."
@@ -35,6 +36,8 @@ class DeploymentInput(Input):
             raise ValueError('Static files do not have an outbound network')
         if self.runtime == 'static' and (self.database_id or self.volume_id or self.migration_command):
             raise ValueError('Data resources require a dynamic runtime')
+        if self.runtime == 'image' and self.build_mode is not None:
+            raise ValueError('Prebuilt images do not need a platform build')
         if self.runtime == 'image' and (self.build_command is not None or self.start_command is not None
                                        or self.output_directory != '.' or self.dockerfile != 'Dockerfile'):
             raise ValueError('Prebuilt images use their own entrypoint; source build settings are not supported')
@@ -48,7 +51,7 @@ class DeploymentInput(Input):
             if key not in self.model_fields_set:
                 value[key] = default
         # Preserve the serialized contract of existing idempotency keys.
-        for key in ['database_id', 'volume_id', 'migration_command']:
+        for key in ['database_id', 'volume_id', 'migration_command', 'build_mode']:
             if value[key] is None:
                 del value[key]
         if value["outbound_network"] == "none":

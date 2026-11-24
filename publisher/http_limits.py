@@ -20,7 +20,11 @@ class ControlLimits:
         try:
             public_login = (self.allow_cli_login and scope["path"] == LOGIN_PATH
                             and scope["method"] in {"GET", "POST"})
-            if not public_login:
+            ci_result = re.fullmatch(r"/v1/platform-builds/([a-f0-9]{24})/(?:result|artifact|source)", scope["path"])
+            if ci_result:
+                from publisher.ci_artifacts import authenticate
+                await run_in_threadpool(authenticate, self.store, ci_result[1], headers.get("authorization", ""), scope["method"])
+            elif not public_login:
                 authorization = headers.get("authorization", "")
                 scheme, _, token = authorization.partition(" ")
                 if scheme.lower() != "bearer" or not token or len(token) > 200:
@@ -38,17 +42,18 @@ class ControlLimits:
                     length = int(headers.get("content-length", "0"))
                 except ValueError:
                     raise Problem(400, "Invalid Content-Length") from None
-                if length > 65536:
+                limit = 2*1024**2 if ci_result and scope["method"] == "PUT" else 65536
+                if length > limit:
                     raise Problem(413, "JSON request exceeds 64 KiB")
                 parts, total = [], 0
-                async with asyncio.timeout(20):
+                async with asyncio.timeout(60 if ci_result else 20):
                     while True:
                         message = await receive()
                         if message["type"] == "http.disconnect":
                             return
                         part = message.get("body", b"")
                         total += len(part)
-                        if total > 65536:
+                        if total > limit:
                             raise Problem(413, "JSON request exceeds 64 KiB")
                         parts.append(part)
                         if not message.get("more_body", False):

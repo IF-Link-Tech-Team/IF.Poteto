@@ -59,6 +59,8 @@ def create_app(settings=None):
     if login is not None:
         login.register(app, store, actor)
 
+    from publisher.ci_artifacts import register as register_ci_artifacts
+    register_ci_artifacts(app, store)
     from publisher.data_api import register
     register(app, store, actor)
     from publisher.project_exports import register as register_exports
@@ -81,6 +83,7 @@ def create_app(settings=None):
         preview = "https://" + settings.hostname(row["project_id"], row["id"],domain=row["app_domain"])
         return {"id": row["id"], "project_id": row["project_id"], "state": row["state"],
                 "runtime_driver": row.get("runtime_driver"),
+                "queue": store.build_queue(row["id"]) if config["runtime"] in {"node", "dockerfile"} or config.get("build_command") else None,
                 "config": config, "created": row["created"], "updated": row["updated"],
                 "artifact_bytes": row["artifact_bytes"], "error": row["error"],
                 "url": preview if row["state"] == "ready" else None,
@@ -191,7 +194,7 @@ def create_app(settings=None):
         image = {'runtime': 'image', 'target': 'preview', 'memory_mb': 256, 'sleep': personal}
         return {'project_id': project_id, 'preview_mode': project['preview_mode'],
                 'enabled': settings.personal_previews if personal else True,
-                'local_build_required': personal,
+                'local_build_required': personal and not settings.platform_builds,
                 'static_vm_free': settings.artifact_enabled(project_id, {'runtime': 'static'}, personal=personal),
                 'prebuilt_images': settings.personal_previews if personal else project_id in settings.prebuilt_image_projects,
                 'stateless_preview_driver': 'gvisor' if settings.sandbox_enabled(project_id, image, personal=personal) else None,
@@ -205,10 +208,11 @@ def create_app(settings=None):
                 'preview_database': {'enabled': settings.native_databases and settings.personal_previews if personal else True,
                                      'driver': 'native-postgres' if personal else 'tenant-vm',
                                      'authorized': bool({'*', 'databases:write', PREVIEW_DATA_SCOPE} & set(user['scopes']))},
+                'platform_builds': {'enabled': settings.platform_builds, 'local_docker_required': False},
                 'web_egress': {'enabled': settings.sandbox_web,
                                'authorized': bool({'*', 'deployments:write', PREVIEW_WEB_SCOPE} & set(user['scopes'])),
                                'ports': [80, 443], 'private_networks': False},
-                'limitations': ['Outbound network requires explicit web permission', 'No volume binding', 'Image previews only; no VM fallback'] if personal else []}
+                'limitations': ['Outbound network requires explicit web permission', 'No volume binding', 'No tenant VM fallback'] if personal else []}
 
     @app.patch('/v1/projects/{project_id}',tags=['Projects'])
     def rename_project(project_id: str,body: ProjectInput,user=Depends(actor)):

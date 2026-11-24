@@ -254,13 +254,14 @@ class Dokploy:
         return self.execution_client().sandbox(deployment['id'], self.account(deployment),
                                                deployment['project_id'], action, **fields)
 
-    def publish_sandbox(self, deployment, archive, log, check, *, before_migrate=None, skip_migration=False):
+    def publish_sandbox(self, deployment, archive, log, check, *, before_migrate=None, skip_migration=False, imported=None):
         config = json.loads(deployment['config'])
         personal = deployment.get('preview_mode') == 'isolated'
         if not self.settings.sandbox_enabled(deployment['project_id'], config, personal=personal):
             raise BackendError('This project is no longer enabled for sandbox previews')
         self.build_output(deployment, config, archive, self.account(deployment), log, check,
-                          native_only=config['runtime'] != 'image')
+                          native_only=config['runtime'] != 'image' and not self.settings.platform_build_enabled(config, personal=personal) and not imported,
+                          imported=imported)
         if config.get('migration_command') and not skip_migration:
             from publisher.data_backend import DataBackend
             if before_migrate:
@@ -612,15 +613,18 @@ class Dokploy:
             if not isinstance(error, ExecutionFailure) or getattr(error, 'status', None) != 404:
                 raise
             build = {k:config[k] for k in ['runtime','build_command','start_command','output_directory','dockerfile'] if k in config}
-            if imported and imported['image_path'] is not None:
+            if imported and imported.get('image_path') is not None:
                 build={'runtime':'image-import','image_reference':imported['reference']};archive=imported['image_path']
             if config.get('outbound_network') == 'web':
                 build['outbound_network'] = 'web'
-            if native_only:
+            platform_build = self.settings.platform_build_enabled(config, personal=deployment.get('preview_mode') == 'isolated') and not (imported and imported.get('image_path') is not None)
+            if platform_build:
+                build['platform_build'] = True
+            elif native_only:
                 build['require_native'] = True
             if static:
                 build['output_kind'] = 'static'
-            if deployment.get('preview_mode') == 'isolated' and build.get('runtime') == 'image':
+            if deployment.get('preview_mode') == 'isolated':
                 build['personal_preview'] = True
             status = client.start_build(deployment['id'], build | {'account_id': account_id, 'project_id': deployment['project_id']}, archive)
         if native_only and status.get('driver') != 'native':
@@ -631,7 +635,7 @@ class Dokploy:
                 raise BackendError('Executor does not support the requested prebuilt image path')
             log('Importing prebuilt image: ' + deployment['id'])
         else:
-            driver = 'Native Docker' if status.get('driver') == 'native' else 'Isolated VM'
+            driver = 'Platform CI' if status.get('driver') == 'remote' else ('Native Docker' if status.get('driver') == 'native' else 'Isolated VM')
             log(driver + ' build job: ' + deployment['id'])
         output = BuildOutput(client, deployment['id'], log)
         deadline = time.monotonic() + 1250
@@ -651,9 +655,9 @@ class Dokploy:
                 log(line)
         if status['state'] != 'succeeded':
             raise BackendError(status.get('error', 'Isolated build failed'))
-        if static and (status.get('driver'), status.get('output_kind')) != ('vm', 'static'):
+        if static and (status.get('driver') not in {'vm', 'remote'} or status.get('output_kind') != 'static'):
             raise BackendError('Isolated builder did not return static files')
-        if config['runtime'] == 'image':
+        if config['runtime'] == 'image' or status.get('driver') == 'remote' and not static:
             from publisher.image_contract import ARCHIVE_LIMIT
             size = status.get('image_bytes')
             if ((prebuilt and status.get('driver') != 'prebuilt') or status.get('image') != 'paas-release:' + deployment['id']
