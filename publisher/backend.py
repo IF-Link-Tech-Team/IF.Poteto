@@ -383,8 +383,11 @@ class Dokploy:
         # Readiness was checked against the app internally. Prove ingress binding separately:
         # the shared edge handles /healthz itself, so an application health path is not a routing probe.
         ingress = self.config.get("ingress_probe", "public")
-        if ingress not in {"public", "origin"}:
-            raise BackendError("ingress_probe must be public or origin")
+        if ingress not in {"public", "private", "origin"}:
+            raise BackendError("ingress_probe must be public, private or origin")
+        headers = {"User-Agent": "OVH-PaaS-Publisher/0.1"}
+        if ingress == "private":
+            headers["Host"] = host
         context = None
         if ingress == "origin":
             try:
@@ -406,12 +409,13 @@ class Dokploy:
         while time.monotonic() < deadline:
             if check:
                 check()
-            connection = (OriginHTTPSConnection(host, address, context) if ingress == "origin"
+            connection = (http.client.HTTPConnection("127.0.0.1", 80, timeout=8) if ingress == "private"
+                          else OriginHTTPSConnection(host, address, context) if ingress == "origin"
                           else http.client.HTTPSConnection(host, timeout=8))
             try:
                 from publisher.preview_protection import probe_headers
                 extra=probe_headers(self,deployment,path) if not production else {}
-                connection.request("GET", path, headers={"User-Agent": "OVH-PaaS-Publisher/0.1"}|extra)
+                connection.request("GET", path, headers=headers|extra)
                 response = connection.getresponse()
                 if 200 <= response.status < 500 and response.getheader("X-Paas-Deployment") == deployment["id"]:
                     return
@@ -420,6 +424,8 @@ class Dokploy:
             finally:
                 connection.close()
             time.sleep(3)
+        if ingress == "private":
+            raise BackendError("Private ingress is not ready; inspect the local route and deployment binding")
         if ingress == "origin":
             raise BackendError("Origin HTTPS endpoint is not ready; inspect origin route synchronization and TLS")
         raise BackendError("Public HTTPS endpoint is not ready; inspect domain and edge connector")

@@ -13,6 +13,22 @@ from test_control import archive
 
 
 class WorkerTests(unittest.TestCase):
+    def test_private_probe_uses_loopback_with_original_host_and_release_binding(self):
+        from unittest.mock import patch
+        deployment = self.queued()
+        backend = Dokploy({"releases": str(self.backend.releases), "ingress_probe": "private"}, self.store.settings)
+        connection = Mock()
+        connection.getresponse.return_value.status = 404
+        connection.getresponse.return_value.getheader.return_value = deployment["id"]
+        with patch("publisher.backend.http.client.HTTPConnection", return_value=connection) as http, \
+             patch("publisher.backend.http.client.HTTPSConnection") as public:
+            backend.public_health(deployment)
+        http.assert_called_once_with("127.0.0.1", 80, timeout=8)
+        public.assert_not_called()
+        self.assertEqual(backend.hostname(deployment), connection.request.call_args.kwargs["headers"]["Host"])
+        connection.getresponse.return_value.getheader.assert_called_once_with("X-Paas-Deployment")
+
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)

@@ -11,6 +11,33 @@ from execution import runtime_data, runtime_rpc
 
 
 class ExecutionTests(unittest.TestCase):
+    def test_configured_tenant_vm_slots_are_not_expanded_by_platform_builds(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(host, 'ROOT', Path(directory)), patch.object(host, 'systemctl') as control:
+            root = Path(directory)
+            (root/'config.json').write_text('{"runtime_slots":2}')
+            (root/'placements.json').write_text(json.dumps({'b'*24:{'slot':0},'c'*24:{'slot':1}}))
+            with self.assertRaisesRegex(host.ExecutionError, 'capacity'):
+                host.runtime('a'*24, 'unused')
+            control.assert_not_called()
+
+    def test_private_registry_config_is_in_seed_only_when_enabled(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(host, "ROOT", Path(temp)), \
+             patch.object(host.subprocess, "run"):
+            root = Path(temp)
+            (root / "admin.key.pub").write_text("fixture")
+            host.cloud_seed(root, "builder")
+            seed = lambda: json.loads((root / "user-data").read_text().split("\n", 1)[1])
+            self.assertEqual([], seed()["write_files"])
+            (root / "config.json").write_text('{"registry_mirror_port":21998}')
+            host.cloud_seed(root, "builder")
+            file, = seed()["write_files"]
+            self.assertEqual("/etc/docker/daemon.json", file["path"])
+            self.assertEqual(["http://10.201.0.2:21998"], json.loads(file["content"])["registry-mirrors"])
+            (root / "config.json").write_text('{"registry_mirror_port":22}')
+            with self.assertRaises(ValueError):
+                host.cloud_seed(root, "builder")
+
+
     def test_runtime_bootstrap_creates_only_missing_network_and_propagates_failure(self):
         import os
         import subprocess

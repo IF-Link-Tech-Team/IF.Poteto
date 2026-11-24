@@ -101,6 +101,15 @@ def cloud_seed(directory, role, deploy_key=None, bootstrap=False, *, prepared_bu
     if bootstrap:
         files = [{"path": "/usr/local/bin/paas-install-docker", "permissions": "0700", "content": (CODE / "execution/docker-bootstrap.sh").read_text()}]
         commands = [["bash", "-c", "/usr/local/bin/paas-install-docker && echo PAAS_EXECUTION_READY > /dev/ttyS0"]]
+    settings = ROOT / "config.json"
+    mirror = json.loads(settings.read_text()).get("registry_mirror_port") if settings.exists() else None
+    if mirror is not None:
+        if mirror != 21998:
+            raise ValueError("The private registry mirror must use port 21998")
+        endpoint = f"10.201.0.2:{mirror}"
+        files.append({"path": "/etc/docker/daemon.json", "permissions": "0644",
+                      "content": json.dumps({"registry-mirrors": ["http://" + endpoint],
+                                             "insecure-registries": [endpoint]})})
     users = [{"name": "ubuntu", "groups": ["adm", "sudo"], "shell": "/bin/bash",
               "sudo": "ALL=(ALL) NOPASSWD:ALL", "lock_passwd": True, "ssh_authorized_keys": keys}]
     if deploy_key:
@@ -279,6 +288,12 @@ def runtime(account_id, deploy_key=None):
             if deploy_key is None:
                 raise KeyError("Runtime not provisioned")
             used = {r["slot"] for r in index.values()}
+            settings = ROOT / "config.json"
+            limit = json.loads(settings.read_text()).get("runtime_slots", 4) if settings.exists() else 4
+            if type(limit) is not int or not 1 <= limit <= 4:
+                raise ValueError("runtime_slots must be between 1 and 4")
+            if len(used) >= limit:
+                raise ExecutionError("Tenant VM capacity reached")
             slot = next((i for i in range(4) if i not in used), None)
             if slot is None:
                 raise ExecutionError("Tenant VM capacity reached")
