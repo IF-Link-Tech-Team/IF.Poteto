@@ -93,12 +93,12 @@ class Settings:
         source = config['runtime'] in {'node', 'dockerfile'} or (config['runtime'] == 'static' and config.get('build_command'))
         return bool(self.platform_builds and source and (personal or config.get('build_mode') == 'platform'))
 
-    def sandbox_enabled(self, project, config, *, personal=False):
+    def sandbox_enabled(self, project, config, *, personal=False, restored=False):
         selected = personal and self.personal_previews
         target = config['target'] == 'preview' or (selected and self.personal_production and config['target'] == 'production')
         return ((selected or project in self.sandbox_projects) and target
                 and config['runtime'] in {'node', 'dockerfile', 'image'} and config['memory_mb'] >= 256
-                and (not selected or config['runtime'] == 'image' or self.platform_build_enabled(config, personal=personal))
+                and (not selected or config['runtime'] == 'image' or restored or self.platform_build_enabled(config, personal=personal))
                 and (not config.get('sleep') or selected or project in self.sandbox_sleep_projects)
                 and not config.get('volume_id')
                 and (not config.get('database_id') or (selected and self.native_databases))

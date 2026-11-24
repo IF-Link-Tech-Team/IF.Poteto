@@ -257,7 +257,8 @@ class Dokploy:
     def publish_sandbox(self, deployment, archive, log, check, *, before_migrate=None, skip_migration=False, imported=None):
         config = json.loads(deployment['config'])
         personal = deployment.get('preview_mode') == 'isolated'
-        if not self.settings.sandbox_enabled(deployment['project_id'], config, personal=personal):
+        if not self.settings.sandbox_enabled(deployment['project_id'], config, personal=personal,
+                                             restored=bool(imported and imported.get('image_path') is not None)):
             raise BackendError('This project is no longer enabled for sandbox previews')
         self.build_output(deployment, config, archive, self.account(deployment), log, check,
                           native_only=config['runtime'] != 'image' and not self.settings.platform_build_enabled(config, personal=personal) and not imported,

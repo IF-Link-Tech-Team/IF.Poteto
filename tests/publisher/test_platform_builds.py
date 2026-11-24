@@ -77,6 +77,12 @@ class PlatformBuildTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             DeploymentInput(runtime='image', build_mode='platform')
 
+    def test_restoring_a_retained_image_does_not_require_a_connected_builder(self):
+        disabled = replace(self.settings, platform_builds=False)
+        config = DeploymentInput(runtime='node', target='preview').configuration()
+        self.assertFalse(disabled.sandbox_enabled(self.project, config, personal=True))
+        self.assertTrue(disabled.sandbox_enabled(self.project, config, personal=True, restored=True))
+
     def test_source_is_built_by_ci_not_native_and_receipt_reserves_real_size(self):
         release = self.api.post(self.base + '/deployments', json={'runtime': 'node', 'target': 'preview'}).json()
         with self.store.connection() as db:

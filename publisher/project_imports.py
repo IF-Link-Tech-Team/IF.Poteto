@@ -355,7 +355,7 @@ def allocate(worker,job,row,manifest,account,source_size,expanded):
         config['target']=row['destination_target']
         driver=ARTIFACT_DRIVER if manifest.static_artifact and store.settings.artifact_enabled(
             project,config,restored=manifest.built_static,personal=personal) else None
-        if personal and not driver and store.settings.sandbox_enabled(project,config,personal=True):
+        if personal and not driver and store.settings.sandbox_enabled(project,config,personal=True,restored=True):
             driver=SANDBOX_DRIVER
         if personal and driver is None:
             raise BundleError('Personal restore requires a supported static artifact or prebuilt image')
