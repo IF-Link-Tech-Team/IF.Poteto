@@ -95,6 +95,9 @@ def build(job, config):
         else:
             raise ValueError('Kubernetes build could not obtain a worker before its deadline')
         pod_name = pod['metadata']['name']
+        if config.get('ovh_node_pool'):
+            from execution.ci_ovh_pool import guard_node
+            guard_node(config, pod['spec']['nodeName'])
         archive = io.BytesIO()
         with tarfile.open(fileobj=archive, mode='w') as bundle:
             bundle.add(job / 'source.tar.gz', arcname='source.tar.gz')

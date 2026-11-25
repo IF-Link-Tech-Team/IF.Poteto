@@ -20,7 +20,13 @@ def main():
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--api-ip', action='append', default=[],
                         help='Real API IPv4 address when the local resolver uses a proxy/fake IP')
+    parser.add_argument('--ovh-node-pool', help='Dedicated 0-2 OVH CI pool; grant scoped power control')
     args = parser.parse_args()
+    node_pool = getattr(args, 'ovh_node_pool', None)
+    if node_pool is not None:
+        import re
+        if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', node_pool):
+            parser.error('Invalid OVH node pool name')
     if args.output.exists():
         parser.error('--output must be a new credential file')
     command = ['kubectl', '--kubeconfig', args.kubeconfig, '--request-timeout=30s']
@@ -72,6 +78,19 @@ def main():
                     '224.0.0.0/4','240.0.0.0/4',*sorted(set(blocked))]}}],
                  'ports':[{'protocol':'TCP','port':443},{'protocol':'TCP','port':80}]}]})]
     objects[1]['metadata']['annotations'] = {'kubernetes.io/service-account.name':'gateway'}
+    if node_pool:
+        role = 'poteto-ci-pool-' + node_pool
+        objects[2]['rules'].append({'apiGroups':['networking.k8s.io'],'resources':['networkpolicies'],
+                                   'resourceNames':['build-isolation'],'verbs':['get','patch']})
+        objects += [
+            {'apiVersion':'rbac.authorization.k8s.io/v1','kind':'ClusterRole','metadata':{'name':role},
+             'rules':[{'apiGroups':['kube.cloud.ovh.com'],'resources':['nodepools'],
+                       'resourceNames':[node_pool],'verbs':['get','patch']},
+                      {'apiGroups':[''],'resources':['pods'],'verbs':['list']},
+                      {'apiGroups':[''],'resources':['nodes'],'verbs':['get']}]},
+            {'apiVersion':'rbac.authorization.k8s.io/v1','kind':'ClusterRoleBinding','metadata':{'name':role},
+             'roleRef':{'apiGroup':'rbac.authorization.k8s.io','kind':'ClusterRole','name':role},
+             'subjects':[{'kind':'ServiceAccount','name':'gateway','namespace':namespace}]}]
     kubectl('apply','-f','-',data=json.dumps({'apiVersion':'v1','kind':'List','items':objects}).encode())
     for _ in range(15):
         secret = json.loads(kubectl('-n',namespace,'get','secret','gateway-token','-o','json'))

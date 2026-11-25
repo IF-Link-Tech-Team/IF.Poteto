@@ -89,3 +89,22 @@ class KubernetesCITests(unittest.TestCase):
             credential=json.loads(output.read_text())
             self.assertEqual({'token':'synthetic-ci-token'},credential['users'][0]['user'])
             self.assertEqual(0o600,output.stat().st_mode&0o777)
+
+    def test_pool_control_grants_only_named_pool_and_egress_policy_mutations(self):
+        root=Path(__file__).resolve().parents[2]
+        module=runpy.run_path(str(root/'scripts/install-kubernetes-builder'))
+        config={'clusters':[{'name':'test','cluster':{'server':'https://api.example.com','certificate-authority-data':'public-ca'}}]}
+        secret={'data':{'token':base64.b64encode(b'synthetic-ci-token').decode()}}
+        with tempfile.TemporaryDirectory() as directory:
+            args=SimpleNamespace(kubeconfig='/private/admin',output=Path(directory)/'ci.json',api_ip=['203.0.113.10'],ovh_node_pool='poteto')
+            with patch('argparse.ArgumentParser.parse_args',return_value=args), patch('subprocess.check_output',
+                side_effect=[json.dumps(config).encode(),b'',b'',b'{"items":[]}',b'',json.dumps(secret).encode()]) as call:
+                module['main']()
+            objects=json.loads(call.call_args_list[4].kwargs['input'])['items']
+            rules=next(x for x in objects if x['kind']=='ClusterRole')['rules']
+            self.assertEqual({'apiGroups':['kube.cloud.ovh.com'],'resources':['nodepools'],
+                'resourceNames':['poteto'],'verbs':['get','patch']},rules[0])
+            self.assertEqual([['pods'],['nodes']],[r['resources'] for r in rules[1:]])
+            rule=next(r for x in objects if x['kind']=='Role' for r in x['rules'] if r['resources']==['networkpolicies'])
+            self.assertEqual(['build-isolation'],rule['resourceNames'])
+            self.assertEqual(['get','patch'],rule['verbs'])

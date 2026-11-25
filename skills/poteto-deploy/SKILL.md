@@ -55,6 +55,8 @@ poteto deploy "$APP_DIR" --prebuilt --project "$PROJECT_ID" --preview --url-only
 
 平台构建使用持久化 FIFO 队列，一次一个，最多接受 64 条源码发布；`poteto queue` 查看当前项目队列，`inspect` 显示位置。队列中可用 `poteto cancel ID` 取消自己的发布。就绪静态成品不被构建队列阻塞。同一账号只有一个并发发布槽时，串行执行多条部署：等上一条返回就绪链接，再预检和部署下一条。遇到并发 429 时查看 `poteto usage` 和正在运行的发布，不重复提交。
 
+托管 CI 空闲时可缩到零节点，首个构建会等待节点启动和 gVisor 初始化。这不会停止南京的已发布应用；用同一发布 ID 查看队列和日志，不重复创建部署，也不自行切换构建方式。
+
 **动态应用分步构建时：** `poteto build "$APP_DIR"` 可构建 Node 或 Dockerfile 项目；已有可信镜像时用 `poteto build "$APP_DIR" --from-image "$IMAGE"`，不会重建。对同一个应用目录，在 `plan` 和 `deploy` 上都传 `--prebuilt-image "$APP_DIR/.poteto/image.tar.gz"`，预检加 `--remote --project "$PROJECT_ID"`，并继续用 `--preview`。镜像上限为压缩 128 MiB、展开 512 MiB；Next.js 等框架优先用多阶段 Dockerfile 和 standalone 产物。不要把凭据、运行时密钥或数据库内容打进镜像。先以 `poteto doctor` / 远端预检确认项目能力；新版新注册个人项目可默认接收镜像，旧托管项目仍按原开通策略。未开通时说明缺项，不反复提交。
 
 远端预检的 `runtime_driver: "gvisor"` 表示运行阶段使用隔离容器、不使用租户 VM；构建后端独立选择，预构建镜像无需执行 CI。新个人项目默认可用，运行内存至少 256 MiB；支持原生数据库的平台还可绑定预览 PostgreSQL 并执行迁移，持久卷仍需托管项目。旧项目仍需平台开通。新个人项目默认休眠，旧项目需开通 `sandbox_sleep_projects`；`sleep: true` 会由 Sablier 在空闲后停止、访问时等待健康检查再唤醒。沿用应用的实际需求，不为选用此通道删除数据绑定。配额满或隔离启动失败时处理错误，不退回无隔离运行。

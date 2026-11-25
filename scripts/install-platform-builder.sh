@@ -11,6 +11,11 @@ DRIVER=${POTETO_CI_DRIVER:-vm}
 KUBECTL=${POTETO_CI_KUBECTL:-/opt/poteto-ci/bin/kubectl}
 KUBECONFIG=${POTETO_CI_KUBECONFIG:-/etc/poteto-ci/kubeconfig}
 BUILDER_IMAGE=${POTETO_CI_BUILDER_IMAGE:-docker.io/library/docker@sha256:9a06753d2401cd049b34cd27dbbc3e0db717d4c1db7bc7f2efad1c187e00bf5a}
+NODE_POOL=${POTETO_CI_OVH_NODE_POOL:-}
+if [ -n "$NODE_POOL" ]; then
+  test "$DRIVER" = kubernetes
+  printf '%s\n' "$NODE_POOL" | grep -Eq '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+fi
 case "$DRIVER" in
   vm) test -c /dev/kvm && test -x "$NODE" && test -f "$VM_MODULE" && test -d "$VM_IMAGE"
       WORKER_MEMORY=6G; WORKER_CPU=200%; WORKER_DEVICE='DeviceAllow=/dev/kvm rw'
@@ -32,11 +37,13 @@ chown potetoci:potetoci /var/lib/poteto-ci/worker.lock
 if [ ! -f /var/lib/poteto-ci/api.token ]; then
   (umask 077; python3 -c 'import secrets; print(secrets.token_urlsafe(48))' > /var/lib/poteto-ci/api.token)
 fi
-python3 - "$NODE" "$VM_MODULE" "${POTETO_CI_CALLBACK_ORIGIN:-https://deploy.iflink.tech}" "$DRIVER" "$KUBECTL" "$KUBECONFIG" "$BUILDER_IMAGE" <<'PY'
+python3 - "$NODE" "$VM_MODULE" "${POTETO_CI_CALLBACK_ORIGIN:-https://deploy.iflink.tech}" "$DRIVER" "$KUBECTL" "$KUBECONFIG" "$BUILDER_IMAGE" "$NODE_POOL" <<'PY'
 import json, sys
 from pathlib import Path
-Path('/var/lib/poteto-ci/worker.json').write_text(json.dumps({'node':sys.argv[1], 'vm_module':sys.argv[2], 'callback_origin':sys.argv[3],
-    'driver':sys.argv[4], 'kubectl':sys.argv[5], 'kubeconfig':sys.argv[6], 'image':sys.argv[7]}))
+config = {'node':sys.argv[1], 'vm_module':sys.argv[2], 'callback_origin':sys.argv[3],
+    'driver':sys.argv[4], 'kubectl':sys.argv[5], 'kubeconfig':sys.argv[6], 'image':sys.argv[7]}
+if sys.argv[8]:config['ovh_node_pool'] = sys.argv[8]
+Path('/var/lib/poteto-ci/worker.json').write_text(json.dumps(config))
 PY
 install -d /etc/poteto-ci /etc/netns/poteto-ci
 printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/netns/poteto-ci/resolv.conf
@@ -158,4 +165,39 @@ TimeoutStopSec=15
 EOF
 systemctl daemon-reload
 systemctl enable --now poteto-ci-network.service poteto-ci.service
+if [ -n "$NODE_POOL" ]; then
+  cat > /etc/systemd/system/poteto-ci-pool.service <<EOF
+[Unit]
+Description=Return the dedicated OVH CI pool to zero after ten idle minutes
+After=network-online.target
+[Service]
+Type=oneshot
+User=potetoci
+Group=potetoci
+WorkingDirectory=$CODE
+ExecStart=/usr/bin/python3 -m execution.ci_ovh_pool
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/poteto-ci/jobs /var/lib/poteto-ci/worker.lock
+MemoryMax=128M
+CPUQuota=20%
+UMask=0077
+EOF
+  cat > /etc/systemd/system/poteto-ci-pool.timer <<'UNIT'
+[Unit]
+Description=Check the dedicated OVH CI pool idle deadline
+[Timer]
+OnBootSec=30
+OnUnitActiveSec=60
+AccuracySec=10
+[Install]
+WantedBy=timers.target
+UNIT
+  systemctl daemon-reload
+  systemctl enable --now poteto-ci-pool.timer
+elif [ -f /etc/systemd/system/poteto-ci-pool.timer ]; then
+  systemctl disable --now poteto-ci-pool.timer
+fi
 printf 'Poteto CI ready on 127.0.0.1:21998; connect using a restricted SSH tunnel.\n'

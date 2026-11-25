@@ -93,11 +93,16 @@ def worker(identifier):
         if json.loads((job / 'status.json').read_text())['state'] != 'queued':
             return
         write(job / 'status.json', {'state': 'running', 'started': time.time()})
+        config = None
         try:
             config = json.loads((ROOT / 'worker.json').read_text())
             driver = config.get('driver', 'vm')
             if driver == 'kubernetes':
+                from execution import ci_ovh_pool
                 from execution.ci_kubernetes import build
+                if config.get('ovh_node_pool'):
+                    (job / 'build.log').write_text('Platform CI: waiting for the OVH node and gVisor runtime\n')
+                ci_ovh_pool.wake(config, ROOT)
                 build(job, config)
             elif driver == 'vm':
                 image = Path(os.environ['IFLINK_CI_VM_IMAGE'])/'root.img'
@@ -116,6 +121,10 @@ def worker(identifier):
         except Exception as error:
             write(job / 'status.json', {'state': 'failed', 'error':
                   str(error) if isinstance(error, ValueError) else 'CI build failed; inspect deployment logs'})
+        finally:
+            if config and config.get('driver') == 'kubernetes' and config.get('ovh_node_pool'):
+                from execution.ci_ovh_pool import touch
+                touch(ROOT)
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
