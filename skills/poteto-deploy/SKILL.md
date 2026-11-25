@@ -39,7 +39,7 @@ poteto deploy "$APP_DIR" --remote-build --project "$PROJECT_ID" --preview --url-
 
 先确认 `plan` 返回 `ok: true`，检查 `runtime`、`public_directory` 和构建/启动命令；如果需要 `--config`，在两个命令上用同一个文件。确认是应用目录或成品目录，而不是包含其他项目或私有文件的上层目录。本地预检不执行构建，也不需要登录。
 
-**默认使用平台 CI，不要求用户安装 Docker。** `--remote-build` 先检查权限、配额和绑定，再上传源码；平台在一次性 KVM CI 虚拟机中执行 npm 或 Dockerfile，运行时变量和部署 token 不进入构建机。个人项目不加构建选项时也默认用平台 CI。`doctor` 的 `capabilities.platform_builds.enabled` 表示服务端能力。平台不支持时说明缺项，不擅自更换平台或扩大权限。
+**默认使用平台 CI，不要求用户安装 Docker。** `--remote-build` 先检查权限、配额和绑定，再上传源码；托管平台在 OVH Kubernetes 的一次性 gVisor 隔离任务中执行 npm 或 Dockerfile，运行时变量、部署 token 和 Kubernetes 凭据不进入构建环境。成品回传南京后运行，数据库和文件卷仍在南京。独立部署也可保留 KVM CI 后端。个人项目不加构建选项时也默认用平台 CI。`doctor` 的 `capabilities.platform_builds.enabled` 表示服务端能力。平台不支持时说明缺项，不擅自更换平台或扩大权限。
 
 用户明确选择本机构建时用 `--local-build`；静态项目需要本地 npm，Node/Dockerfile 需要 Docker Engine API 1.48+ 和 Buildx。该模式失败不自动切换平台构建。两种模式与 `--prebuilt` / `--prebuilt-image` 互斥。Dockerfile 中的应用文件须可被 UID 10001 读取；不要放在运行时会覆盖的 `/tmp`，根文件系统为只读。保留用户的构建选择。
 
@@ -57,7 +57,7 @@ poteto deploy "$APP_DIR" --prebuilt --project "$PROJECT_ID" --preview --url-only
 
 **动态应用分步构建时：** `poteto build "$APP_DIR"` 可构建 Node 或 Dockerfile 项目；已有可信镜像时用 `poteto build "$APP_DIR" --from-image "$IMAGE"`，不会重建。对同一个应用目录，在 `plan` 和 `deploy` 上都传 `--prebuilt-image "$APP_DIR/.poteto/image.tar.gz"`，预检加 `--remote --project "$PROJECT_ID"`，并继续用 `--preview`。镜像上限为压缩 128 MiB、展开 512 MiB；Next.js 等框架优先用多阶段 Dockerfile 和 standalone 产物。不要把凭据、运行时密钥或数据库内容打进镜像。先以 `poteto doctor` / 远端预检确认项目能力；新版新注册个人项目可默认接收镜像，旧托管项目仍按原开通策略。未开通时说明缺项，不反复提交。
 
-远端预检的 `runtime_driver: "gvisor"` 表示运行阶段使用隔离容器、不使用租户 VM；平台源码构建仍使用一次性 CI VM，预构建镜像则无需构建 VM。新个人项目默认可用，运行内存至少 256 MiB；支持原生数据库的平台还可绑定预览 PostgreSQL 并执行迁移，持久卷仍需托管项目。旧项目仍需平台开通。新个人项目默认休眠，旧项目需开通 `sandbox_sleep_projects`；`sleep: true` 会由 Sablier 在空闲后停止、访问时等待健康检查再唤醒。沿用应用的实际需求，不为选用此通道删除数据绑定。配额满或隔离启动失败时处理错误，不退回无隔离运行。
+远端预检的 `runtime_driver: "gvisor"` 表示运行阶段使用隔离容器、不使用租户 VM；构建后端独立选择，预构建镜像无需执行 CI。新个人项目默认可用，运行内存至少 256 MiB；支持原生数据库的平台还可绑定预览 PostgreSQL 并执行迁移，持久卷仍需托管项目。旧项目仍需平台开通。新个人项目默认休眠，旧项目需开通 `sandbox_sleep_projects`；`sleep: true` 会由 Sablier 在空闲后停止、访问时等待健康检查再唤醒。沿用应用的实际需求，不为选用此通道删除数据绑定。配额满或隔离启动失败时处理错误，不退回无隔离运行。
 
 - Node 源码构建需要 npm 锁文件。动态应用须监听 `0.0.0.0` 上平台提供的 `PORT`；非 npm 构建可以使用 Dockerfile。预览数据库或卷由项目所有者预先创建和授权，沿用已有绑定。
 - CLI 0.12.0 配合新版服务端会自动分片上传，并在当前应用的 `.poteto/` 保存不含凭据的待上传成品。若上传中断，在同一目录执行 `poteto deploy . --project "$PROJECT_ID" --resume <发布 ID>`，沿用输出中的 ID；不要重新构建、添加 `--local-build`、更换目标或创建另一个发布。收到服务端已入队确认后，本地待上传副本会自动删除。0.22.1 起会对 EdgeOne 522/524 和短暂断线查询已确认偏移后有限重试；证书验证或权限错误不会重试。

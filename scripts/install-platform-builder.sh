@@ -7,8 +7,22 @@ CODE=${POTETO_CI_CODE:-/opt/poteto-ci}
 NODE=${POTETO_CI_NODE:-/opt/iflink-ci/node/bin/node}
 VM_MODULE=${POTETO_CI_VM_MODULE:-/opt/iflink-ci/runner/vm.mjs}
 VM_IMAGE=${POTETO_CI_VM_IMAGE:-/var/lib/iflink-ci-vm/images/current}
-test -c /dev/kvm && test -x "$NODE" && test -f "$VM_MODULE" && test -d "$VM_IMAGE"
+DRIVER=${POTETO_CI_DRIVER:-vm}
+KUBECTL=${POTETO_CI_KUBECTL:-/opt/poteto-ci/bin/kubectl}
+KUBECONFIG=${POTETO_CI_KUBECONFIG:-/etc/poteto-ci/kubeconfig}
+BUILDER_IMAGE=${POTETO_CI_BUILDER_IMAGE:-docker.io/library/docker@sha256:9a06753d2401cd049b34cd27dbbc3e0db717d4c1db7bc7f2efad1c187e00bf5a}
+case "$DRIVER" in
+  vm) test -c /dev/kvm && test -x "$NODE" && test -f "$VM_MODULE" && test -d "$VM_IMAGE"
+      WORKER_MEMORY=6G; WORKER_CPU=200%; WORKER_DEVICE='DeviceAllow=/dev/kvm rw' ;;
+  kubernetes) test -x "$KUBECTL" && test -r "$KUBECONFIG"
+      WORKER_MEMORY=512M; WORKER_CPU=50%; WORKER_DEVICE='' ;;
+  *) echo 'POTETO_CI_DRIVER must be vm or kubernetes' >&2; exit 2 ;;
+esac
 id potetoci >/dev/null 2>&1 || useradd --system --home-dir /var/lib/poteto-ci --shell /usr/sbin/nologin potetoci
+if [ "$DRIVER" = kubernetes ]; then
+  chown root:potetoci "$KUBECONFIG"
+  chmod 640 "$KUBECONFIG"
+fi
 install -d -m 750 -o root -g potetoci /var/lib/poteto-ci
 install -d -m 700 -o potetoci -g potetoci /var/lib/poteto-ci/jobs
 install -d -m 700 -o root -g root /var/lib/poteto-ci/callbacks
@@ -17,10 +31,11 @@ chown potetoci:potetoci /var/lib/poteto-ci/worker.lock
 if [ ! -f /var/lib/poteto-ci/api.token ]; then
   (umask 077; python3 -c 'import secrets; print(secrets.token_urlsafe(48))' > /var/lib/poteto-ci/api.token)
 fi
-python3 - "$NODE" "$VM_MODULE" "${POTETO_CI_CALLBACK_ORIGIN:-https://deploy.iflink.tech}" <<'PY'
+python3 - "$NODE" "$VM_MODULE" "${POTETO_CI_CALLBACK_ORIGIN:-https://deploy.iflink.tech}" "$DRIVER" "$KUBECTL" "$KUBECONFIG" "$BUILDER_IMAGE" <<'PY'
 import json, sys
 from pathlib import Path
-Path('/var/lib/poteto-ci/worker.json').write_text(json.dumps({'node':sys.argv[1], 'vm_module':sys.argv[2], 'callback_origin':sys.argv[3]}))
+Path('/var/lib/poteto-ci/worker.json').write_text(json.dumps({'node':sys.argv[1], 'vm_module':sys.argv[2], 'callback_origin':sys.argv[3],
+    'driver':sys.argv[4], 'kubectl':sys.argv[5], 'kubeconfig':sys.argv[6], 'image':sys.argv[7]}))
 PY
 install -d /etc/poteto-ci /etc/netns/poteto-ci
 printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/netns/poteto-ci/resolv.conf
@@ -112,10 +127,10 @@ ProtectKernelLogs=yes
 ProtectControlGroups=yes
 RestrictSUIDSGID=yes
 DevicePolicy=closed
-DeviceAllow=/dev/kvm rw
+$WORKER_DEVICE
 UMask=0077
-MemoryMax=6G
-CPUQuota=200%
+MemoryMax=$WORKER_MEMORY
+CPUQuota=$WORKER_CPU
 TasksMax=1024
 RuntimeMaxSec=3600
 TimeoutStopSec=15

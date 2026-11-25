@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""Install namespace-scoped CI permissions and export a protected gateway credential."""
+import argparse
+import json
+import os
+import ipaddress
+from pathlib import Path
+import socket
+import subprocess
+import time
+from urllib.parse import urlsplit
+
+ROOT = Path(__file__).resolve().parents[1]
+IMAGE = 'docker.io/library/docker@sha256:9a06753d2401cd049b34cd27dbbc3e0db717d4c1db7bc7f2efad1c187e00bf5a'
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--kubeconfig', required=True)
+    parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--api-ip', action='append', default=[],
+                        help='Real API IPv4 address when the local resolver uses a proxy/fake IP')
+    args = parser.parse_args()
+    if args.output.exists():
+        parser.error('--output must be a new credential file')
+    command = ['kubectl', '--kubeconfig', args.kubeconfig, '--request-timeout=30s']
+    def kubectl(*parts, data=None):
+        return subprocess.check_output(command + list(parts), input=data)
+    config = json.loads(kubectl('config', 'view', '--raw', '--minify', '-o', 'json'))
+    api_host = urlsplit(config['clusters'][0]['cluster']['server']).hostname
+    addresses = args.api_ip or [address[4][0] for address in
+        socket.getaddrinfo(api_host,443,family=socket.AF_INET,type=socket.SOCK_STREAM)]
+    if not args.api_ip and any(ipaddress.ip_address(value) in ipaddress.ip_network('198.18.0.0/15') for value in addresses):
+        parser.error('The API resolves to a proxy/fake IP; pass its real IPv4 address with --api-ip')
+    nodes = json.loads(kubectl('get','nodes','-o','json'))['items']
+    addresses += [address['address'] for node in nodes for address in node['status'].get('addresses',[])
+                  if address['type'] == 'ExternalIP' and ':' not in address['address']]
+    blocked = [str(ipaddress.ip_network(value + '/32')) for value in addresses]
+    namespace = 'poteto-ci'
+    def obj(kind, name, **values):
+        api = {'Role': 'rbac.authorization.k8s.io/v1', 'RoleBinding': 'rbac.authorization.k8s.io/v1',
+               'NetworkPolicy': 'networking.k8s.io/v1'}.get(kind, 'v1')
+        return {'apiVersion': api, 'kind': kind, 'metadata': {'name': name, 'namespace': namespace}, **values}
+    code = {}
+    for name in ['ci_kube_worker.py', 'guest_build.py', 'build_source.py']:
+        code[name] = (ROOT / 'execution' / name).read_text()
+    for name in ['__init__.py', 'archive.py', 'build_recipe.py']:
+        code['publisher-' + name] = (ROOT / 'publisher' / name).read_text()
+    objects = [obj('ServiceAccount', 'gateway'),
+        obj('Secret', 'gateway-token', type='kubernetes.io/service-account-token'),
+        obj('Role', 'gateway', rules=[
+            {'apiGroups': ['batch'], 'resources': ['jobs'], 'verbs': ['get','list','create','delete']},
+            {'apiGroups': [''], 'resources': ['pods','pods/log'], 'verbs': ['get','list']},
+            {'apiGroups': [''], 'resources': ['pods/exec'], 'verbs': ['get','create']}]),
+        obj('RoleBinding', 'gateway', roleRef={'apiGroup':'rbac.authorization.k8s.io','kind':'Role','name':'gateway'},
+            subjects=[{'kind':'ServiceAccount','name':'gateway','namespace':namespace}]),
+        obj('ConfigMap', 'poteto-ci-code', data=code),
+        obj('ResourceQuota', 'build-budget', spec={'hard': {'requests.cpu':'4500m','limits.cpu':'4500m',
+            'requests.memory':'9Gi','limits.memory':'9Gi','requests.ephemeral-storage':'20Gi',
+            'limits.ephemeral-storage':'40Gi','pods':'3','count/jobs.batch':'3'}}),
+        obj('NetworkPolicy', 'build-isolation', spec={'podSelector':{},'policyTypes':['Ingress','Egress'],
+            'ingress':[], 'egress':[
+                {'to':[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kube-system'}},
+                        'podSelector':{'matchLabels':{'k8s-app':'kube-dns'}}}],
+                 'ports':[{'protocol':'UDP','port':53},{'protocol':'TCP','port':53}]},
+                {'to':[{'ipBlock':{'cidr':'0.0.0.0/0','except':[
+                    '0.0.0.0/8','10.0.0.0/8','100.64.0.0/10','127.0.0.0/8','169.254.0.0/16',
+                    '172.16.0.0/12','192.168.0.0/16','198.18.0.0/15',
+                    '224.0.0.0/4','240.0.0.0/4',*sorted(set(blocked))]}}],
+                 'ports':[{'protocol':'TCP','port':443},{'protocol':'TCP','port':80}]}]})]
+    objects[1]['metadata']['annotations'] = {'kubernetes.io/service-account.name':'gateway'}
+    kubectl('apply','-f','-',data=json.dumps({'apiVersion':'v1','kind':'List','items':objects}).encode())
+    for _ in range(15):
+        secret = json.loads(kubectl('-n',namespace,'get','secret','gateway-token','-o','json'))
+        if secret.get('data',{}).get('token'):
+            break
+        time.sleep(1)
+    else:
+        raise RuntimeError('CI service account token was not issued')
+    import base64
+    output = {'apiVersion':'v1','kind':'Config','clusters':config['clusters'],
+        'users':[{'name':'poteto-ci-gateway','user':{'token':base64.b64decode(secret['data']['token']).decode()}}],
+        'contexts':[{'name':'poteto-ci','context':{'cluster':config['clusters'][0]['name'],
+                   'user':'poteto-ci-gateway','namespace':namespace}}], 'current-context':'poteto-ci'}
+    descriptor = os.open(args.output,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+    with os.fdopen(descriptor,'w') as stream:
+        json.dump(output,stream)
+    print('CI namespace ready; protected gateway credential written to',args.output)
+    print('Builder image:',IMAGE)
+
+
+if __name__ == '__main__':
+    main()

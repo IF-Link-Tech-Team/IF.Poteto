@@ -95,12 +95,19 @@ def worker(identifier):
         write(job / 'status.json', {'state': 'running', 'started': time.time()})
         try:
             config = json.loads((ROOT / 'worker.json').read_text())
-            image = Path(os.environ['IFLINK_CI_VM_IMAGE'])/'root.img'
-            virtual = json.loads(subprocess.check_output(['qemu-img', 'info', '--output=json', str(image)]))['virtual-size']
-            if shutil.disk_usage(ROOT).free < virtual+20*1024**3:
-                raise ValueError('CI disk cannot reserve the disposable VM plus 20 GiB headroom')
-            subprocess.run([config['node'], str(Path(__file__).with_name('ci_vm.mjs')), str(job),
-                            config['vm_module']], check=True, timeout=1200)
+            driver = config.get('driver', 'vm')
+            if driver == 'kubernetes':
+                from execution.ci_kubernetes import build
+                build(job, config)
+            elif driver == 'vm':
+                image = Path(os.environ['IFLINK_CI_VM_IMAGE'])/'root.img'
+                virtual = json.loads(subprocess.check_output(['qemu-img', 'info', '--output=json', str(image)]))['virtual-size']
+                if shutil.disk_usage(ROOT).free < virtual+20*1024**3:
+                    raise ValueError('CI disk cannot reserve the disposable VM plus 20 GiB headroom')
+                subprocess.run([config['node'], str(Path(__file__).with_name('ci_vm.mjs')), str(job),
+                                config['vm_module']], check=True, timeout=1200)
+            else:
+                raise ValueError('Unknown CI execution driver')
             receipt = json.loads((job / 'result.json').read_text())
             size = (job / 'artifact.tar.gz').stat().st_size
             if receipt.get('state') != 'succeeded' or not 0 < size <= receipt['limit']:
@@ -278,6 +285,10 @@ if __name__ == '__main__':
     elif len(sys.argv) == 3 and sys.argv[1] == 'finish' and ID.fullmatch(sys.argv[2]):
         job = ROOT / 'jobs' / sys.argv[2]
         if job.exists():
+            config = json.loads((ROOT / 'worker.json').read_text())
+            if config.get('driver') == 'kubernetes':
+                from execution.ci_kubernetes import cleanup
+                cleanup(config, sys.argv[2])
             receipt = json.loads((job / 'status.json').read_text())
             if receipt['state'] in ('queued', 'running'):
                 write(job / 'status.json', {'state': 'failed', 'error': 'CI supervisor stopped or timed out'})

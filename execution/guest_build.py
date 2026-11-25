@@ -45,7 +45,8 @@ def normalize_image(spec,image):
 def build_source(spec,image):
     source, path = prepare_source(spec, WORK, WORK / 'source.tar.gz')
     output = ["--output", "type=tar,dest=" + str(WORK / "static.tar")] if spec.get("output_kind") == "static" else ["--tag", image]
-    return logged(["docker", "build", "--progress=plain", *output, "--file", str(path), str(source)])
+    network = ['--network=host'] if os.environ.get('POTETO_BUILD_NETWORK') == 'host' else []
+    return logged(["docker", "build", "--progress=plain", *network, *output, "--file", str(path), str(source)])
 
 
 def main():
