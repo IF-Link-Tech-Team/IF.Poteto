@@ -121,7 +121,9 @@ poteto usage --json
 poteto prune --older-than-days 7 --keep 3
 ```
 
-`usage` shows the account's artifact-storage, runtime and concurrent-deployment budgets, plus accessible projects and the selected project's visible release reservations. These are the same reservations used by admission checks, not measured CPU or RSS; sleeping apps still reserve capacity. Database/volume disk space is separate from artifact storage. Project-scoped credentials never list another project's releases, and preview credentials do not list production releases.
+`usage` shows the account's artifact-storage, runtime and concurrent-deployment budgets, the whole-platform and shared-sandbox runtime budgets, plus accessible projects and the selected project's visible release reservations. An application must fit all three runtime budgets; free sandbox capacity does not override the platform-wide limit. These are the same reservations used by admission checks, not measured CPU or RSS; sleeping apps still reserve capacity. Database/volume disk space is separate from artifact storage. Project-scoped credentials never list another project's releases, and preview credentials do not list production releases.
+
+Operators can set `platform_cpu_limit` in `/etc/paas-publisher-runtime.json` to match the execution host's CPU budget, then reload the publisher API and workers after active jobs drain. The default remains 6 vCPU; the whole-platform memory budget is 20 GiB. This setting changes admission, not individual application limits or the sandbox cgroup. Keep the independent sandbox limit and control-plane headroom in mind; do not use the controller VM's virtual CPU count as the execution host's capacity. Platform-capacity errors include the reserved, requested and maximum CPU/memory values.
 
 `prune` is read-only by default. It protects production, every release referenced by a promotion/rollback operation, data-bound previews, active deployments, and the newest three ready previews. Only previews older than seven days are selected by default. It reports the reservations that deletion would release, not a promise about physical disk savings.
 

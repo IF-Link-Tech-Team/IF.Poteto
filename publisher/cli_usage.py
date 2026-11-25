@@ -18,6 +18,10 @@ def show_usage(result):
     print(f"Account runtime: {runtime['reserved']['memory_mib']} / {runtime['limit']['memory_mib']} MiB; "
           f"{runtime['reserved']['vcpus']:g} / {runtime['limit']['vcpus']:g} vCPU reserved")
     print(f"In-flight deployments: {slots['used']} / {slots['limit']}")
+    platform = result.get('platform_runtime')
+    if platform is not None:
+        print(f"Platform runtime: {platform['reserved']['memory_mib']} / {platform['limit']['memory_mib']} MiB; "
+              f"{platform['reserved']['vcpus']:g} / {platform['limit']['vcpus']:g} vCPU reserved")
     sandbox = result['sandbox_runtime']
     print(f"Shared sandbox pool: {sandbox['reserved']['memory_mib']} / {sandbox['limit']['memory_mib']} MiB; "
           f"{sandbox['reserved']['vcpus']:g} / {sandbox['limit']['vcpus']:g} vCPU reserved")

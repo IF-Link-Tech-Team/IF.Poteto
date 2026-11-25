@@ -436,8 +436,11 @@ class Store:
             raise Problem(429, "Account runtime memory reservation exceeds 4096 MiB; delete unused releases")
         if account["vcpus"] + config["cpus"] > capacity.ACCOUNT["vcpus"]:
             raise Problem(429, "Account runtime CPU reservation exceeds 4 vCPU; delete unused releases")
-        if total["memory_mib"] + config["memory_mb"] > capacity.PLATFORM["memory_mib"] or total["vcpus"] + config["cpus"] > capacity.PLATFORM["vcpus"]:
-            raise Problem(429, "Platform runtime capacity is reserved; retry after releases are removed")
+        limits = self.settings.platform_limits
+        if total["memory_mib"] + config["memory_mb"] > limits["memory_mib"] or total["vcpus"] + config["cpus"] > limits["vcpus"]:
+            raise Problem(429, "Platform runtime capacity is reserved; retry after releases are removed. "
+                          f"CPU {total['vcpus']:g}/{limits['vcpus']:g} vCPU reserved, requesting {config['cpus']:g}; "
+                          f"memory {total['memory_mib']}/{limits['memory_mib']} MiB reserved, requesting {config['memory_mb']}.")
 
     def deployment_preconditions(self, db, actor, project, config):
         project_id = project['id']

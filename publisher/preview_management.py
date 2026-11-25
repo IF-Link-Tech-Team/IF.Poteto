@@ -77,7 +77,7 @@ def usage(store, actor, project_id):
                                      'limit_bytes': account['max_storage']},
                 'account_runtime': {'reserved': totals['accounts'].get(actor['account_id'], capacity.empty()),
                                     'limit': capacity.ACCOUNT},
-                'platform_runtime': {'reserved': totals['platform'], 'limit': capacity.PLATFORM},
+                'platform_runtime': {'reserved': totals['platform'], 'limit': store.settings.platform_limits},
                 'sandbox_runtime': {'reserved': totals['sandbox'], 'limit': store.settings.sandbox_limits},
                 'deployment_slots': {'used': capacity.active_count(db, actor['account_id']), 'limit': account['max_concurrent']},
                 'project_slots': {'used': db.execute("SELECT count(*) FROM projects WHERE account_id=? AND state!='deleted'",

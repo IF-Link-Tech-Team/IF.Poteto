@@ -64,6 +64,10 @@ class UsageCliTests(unittest.TestCase):
         self.assertIn('1.00 MiB / 512.00 MiB',out)
         self.assertIn('not live CPU/RSS',out)
         self.assertIn('Sleeping apps keep their reservations',out)
+        result['platform_runtime'] = {'reserved': {'memory_mib': 6848, 'vcpus': 5.95},
+                                      'limit': {'memory_mib': 20480, 'vcpus': 8}}
+        out,_=self.command(client,'usage','--project',P)
+        self.assertIn('Platform runtime: 6848 / 20480 MiB; 5.95 / 8 vCPU reserved',out)
 
     def test_login_management_is_opt_in_and_server_capability_is_checked(self):
         with tempfile.TemporaryDirectory() as folder:

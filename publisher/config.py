@@ -33,6 +33,7 @@ class Settings:
     personal_workspaces: bool = False
     preview_protection: bool = False
     platform_builds: bool = False
+    platform_cpu_limit: float = 6
 
     def __post_init__(self):
         if not valid_domain(self.domain):
@@ -76,6 +77,9 @@ class Settings:
         if (type(self.sandbox_cpu_limit) not in (int, float) or not math.isfinite(self.sandbox_cpu_limit)
                 or not 0.1 <= self.sandbox_cpu_limit <= 8):
             raise ValueError('sandbox_cpu_limit must be between 0.1 and 8')
+        if (type(self.platform_cpu_limit) not in (int, float) or not math.isfinite(self.platform_cpu_limit)
+                or self.platform_cpu_limit < 0.1):
+            raise ValueError('platform_cpu_limit must be a finite number of at least 0.1')
 
     def upload_limits(self, runtime):
         if runtime == "image":
@@ -128,7 +132,13 @@ class Settings:
                    native_databases=runtime.get('native_databases', False),
                    personal_production=runtime.get('personal_production', False),
                    personal_workspaces=runtime.get('personal_workspaces', False),
-                   preview_protection=runtime.get('preview_protection', False))
+                   preview_protection=runtime.get('preview_protection', False),
+                   platform_cpu_limit=runtime.get('platform_cpu_limit', 6))
+
+    @property
+    def platform_limits(self):
+        from publisher.capacity import PLATFORM
+        return PLATFORM | {'vcpus': self.platform_cpu_limit}
 
     @property
     def sandbox_limits(self):
