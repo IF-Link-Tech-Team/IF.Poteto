@@ -1,6 +1,6 @@
 #!/bin/sh
-# Install a separate build-only service using an existing IF.Lathe Linux image.
-# Run as root on a Linux KVM host. Does not restart Lathe or application runtimes.
+# Install a build-only gateway with an explicit KVM or Kubernetes backend.
+# Run as root on Linux. Does not restart Lathe or application runtimes.
 set -eu
 test "$(id -u)" = 0
 CODE=${POTETO_CI_CODE:-/opt/poteto-ci}
@@ -13,9 +13,10 @@ KUBECONFIG=${POTETO_CI_KUBECONFIG:-/etc/poteto-ci/kubeconfig}
 BUILDER_IMAGE=${POTETO_CI_BUILDER_IMAGE:-docker.io/library/docker@sha256:9a06753d2401cd049b34cd27dbbc3e0db717d4c1db7bc7f2efad1c187e00bf5a}
 case "$DRIVER" in
   vm) test -c /dev/kvm && test -x "$NODE" && test -f "$VM_MODULE" && test -d "$VM_IMAGE"
-      WORKER_MEMORY=6G; WORKER_CPU=200%; WORKER_DEVICE='DeviceAllow=/dev/kvm rw' ;;
+      WORKER_MEMORY=6G; WORKER_CPU=200%; WORKER_DEVICE='DeviceAllow=/dev/kvm rw'
+      WORKER_GROUPS='SupplementaryGroups=kvm' ;;
   kubernetes) test -x "$KUBECTL" && test -r "$KUBECONFIG"
-      WORKER_MEMORY=512M; WORKER_CPU=50%; WORKER_DEVICE='' ;;
+      WORKER_MEMORY=512M; WORKER_CPU=50%; WORKER_DEVICE=''; WORKER_GROUPS='' ;;
   *) echo 'POTETO_CI_DRIVER must be vm or kubernetes' >&2; exit 2 ;;
 esac
 id potetoci >/dev/null 2>&1 || useradd --system --home-dir /var/lib/poteto-ci --shell /usr/sbin/nologin potetoci
@@ -106,7 +107,7 @@ Requires=poteto-ci-network.service
 Type=exec
 User=potetoci
 Group=potetoci
-SupplementaryGroups=kvm
+$WORKER_GROUPS
 WorkingDirectory=$CODE
 Environment=IFLINK_CI_VM_IMAGE=$VM_IMAGE
 Environment=HOME=/var/lib/poteto-ci
