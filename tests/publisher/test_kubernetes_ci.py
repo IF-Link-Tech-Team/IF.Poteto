@@ -1,6 +1,10 @@
 import json
+import base64
 from pathlib import Path
+import runpy
+import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch,Mock
 
 from execution.ci_kubernetes import Client,job_name,manifest
@@ -67,3 +71,21 @@ class KubernetesCITests(unittest.TestCase):
         with patch('execution.ci_kubernetes.subprocess.run',return_value=Mock(returncode=1,stderr=b'quota exceeded')):
             with self.assertRaisesRegex(ValueError,'quota exceeded'):
                 client.run('create','-f','-')
+
+    def test_builder_bootstrap_creates_its_namespace_and_exports_only_scoped_credentials(self):
+        root=Path(__file__).resolve().parents[2]
+        module=runpy.run_path(str(root/'scripts/install-kubernetes-builder'))
+        config={'clusters':[{'name':'test','cluster':{'server':'https://api.example.com','certificate-authority-data':'public-ca'}}]}
+        secret={'data':{'token':base64.b64encode(b'synthetic-ci-token').decode()}}
+        with tempfile.TemporaryDirectory() as directory:
+            output=Path(directory)/'ci.json'
+            args=SimpleNamespace(kubeconfig='/private/admin',output=output,api_ip=['203.0.113.10'])
+            with patch('argparse.ArgumentParser.parse_args',return_value=args), patch('subprocess.check_output',
+                side_effect=[json.dumps(config).encode(),b'',b'',b'{"items":[]}',b'',json.dumps(secret).encode()]) as call:
+                module['main']()
+            namespace=json.loads(call.call_args_list[1].kwargs['input'])
+            self.assertEqual('Namespace',namespace['kind'])
+            self.assertEqual('poteto-ci',namespace['metadata']['name'])
+            credential=json.loads(output.read_text())
+            self.assertEqual({'token':'synthetic-ci-token'},credential['users'][0]['user'])
+            self.assertEqual(0o600,output.stat().st_mode&0o777)
