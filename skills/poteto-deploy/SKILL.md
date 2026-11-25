@@ -88,6 +88,8 @@ Poteto 0.23.0 支持项目别名，例如 `my-blog.page.iflink.tech`。用 `pote
 
 `poteto usage --project "$PROJECT_ID" --json` 返回实际用于准入的空间、运行资源和并发额度预留，以及当前凭据可见的项目版本；不是实时 CPU/RSS，休眠仍保留唤醒额度。空间或资源不足时先据此定位，不重复创建部署。
 
+动态应用必须同时满足账号、整个平台和共享沙箱池的预算；数据库也占用运行额度，静态成品不占动态沙箱额度。启用旧 VM 整机记账的平台会按每个旧账号的整台 VM 预留资源，所以平台总额不一定等于应用配额之和。不要为绕过 429 降低应用实际所需内存、停止别人的应用或改用管理员凭据。
+
 `poteto prune --project "$PROJECT_ID" --json` 只预览清理候选，默认保留最新三个就绪预览和最近七天的版本；生产、曾用于发布/回滚的版本、绑定数据库或卷的预览不会入选。删除须取得用户对具体 ID 的授权，再用同一筛选条件执行 `poteto prune --project "$PROJECT_ID" --yes --ids ID1 ID2 --json`。中断后重复原 ID 列表，不扩大选择。部署专用 token 没有清理权限；不要擅自扩权或替用户启用 `login --manage-previews`，应由用户使用管理凭据执行。
 
 `poteto retention status --project "$PROJECT_ID" --json` 可检查自动保留策略和最近任务。默认关闭；`retention set --older-than-days 7 --keep 3` 也只是预检。只有用户明确授权持续清理该项目的过期预览时，才可用项目管理凭据加 `--yes` 保存；一次性删除几个 ID 的授权不能用来启用自动策略。策略保留至少一个就绪预览，沿用生产、回滚历史、数据绑定保护。删除不可恢复；失败任务应检查后按原 ID 手动重试。`retention disable` 阻止尚未开始的清理，已开始的删除会安全完成。

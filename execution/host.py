@@ -307,8 +307,12 @@ def runtime(account_id, deploy_key=None):
     with lock("runtime" + str(slot)):
         if record["state"] == "ready":
             if unit_state(f"paas-runtime@{slot}.service") not in {"active", "activating"}:
-                systemctl("start", f"paas-runtime@{slot}.service")
+                if suspension_path(account_id).exists():
+                    systemctl("enable", "--now", f"paas-runtime@{slot}.service")
+                else:
+                    systemctl("start", f"paas-runtime@{slot}.service")
                 wait_ready(f"runtime{slot}", record["ssh_port"], record["alias"], timeout=180)
+            suspension_path(account_id).unlink(missing_ok=True)
             return record
 
         directory = ROOT / "vm" / f"runtime{slot}"
@@ -333,7 +337,38 @@ def runtime_status(account_id):
         raise KeyError('Runtime not provisioned')
     record=index[account_id]
     return record | {'unit_state':unit_state(f"paas-runtime@{record['slot']}.service"),
-        'disk_exists':(ROOT/'vm'/f"runtime{record['slot']}"/'root.qcow2').is_file()}
+        'disk_exists':(ROOT/'vm'/f"runtime{record['slot']}"/'root.qcow2').is_file(),
+        'suspended':suspension_path(account_id).exists()}
+
+
+def suspension_path(account):
+    return ROOT/'suspended'/(checked_id(account)+'.json')
+
+
+def suspend_empty_runtime(account):
+    """Stop only an empty tenant VM; retain its disk and normal write entry points."""
+    account=checked_id(account)
+    with lock('account-'+account):
+        index=json.loads((ROOT/'placements.json').read_text())
+        record=placement_for_retirement(index,account)
+        if record is None:
+            raise ExecutionError('Runtime not provisioned')
+        marker=suspension_path(account)
+        with lock('runtime'+str(record['slot'])):
+            if marker.exists() and unit_state(f"paas-runtime@{record['slot']}.service")=='inactive':
+                return runtime_status(account)
+            for spec_path in (ROOT/'builds').glob('*/spec.json'):
+                spec=json.loads(spec_path.read_text())
+                state_path=spec_path.with_name('status.json')
+                if spec.get('account_id')==account and state_path.exists() and json.loads(state_path.read_text()).get('state') in {'queued','running'}:
+                    raise ExecutionError('Tenant has an active build')
+            confirm_empty_runtime(record)
+            systemctl('disable','--now',f"paas-runtime@{record['slot']}.service")
+            if unit_state(f"paas-runtime@{record['slot']}.service")!='inactive':
+                raise ExecutionError('Runtime did not stop; its disk is retained')
+            marker.parent.mkdir(mode=0o700,exist_ok=True)
+            write_json(marker,{'account_id':account,'slot':record['slot'],'state':'suspended-empty'},durable=True)
+        return runtime_status(account)
 
 
 def retirement_path(account_id):
@@ -1004,7 +1039,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.response(200, status(parts[2]))
             if len(parts) == 3 and parts[:2] == ["v1", "runtimes"]:
                 with active_account(parts[2]):
-                    return self.response(200, runtime(parts[2]))
+                    return self.response(200, runtime_status(parts[2]) if suspension_path(parts[2]).exists() else runtime(parts[2]))
             self.response(404, {"error": "Unknown execution operation"})
         except (ValueError, KeyError, FileNotFoundError) as error:
             self.response(404, {"error": str(error)})
@@ -1162,6 +1197,10 @@ def main():
         run_build(sys.argv[2])
     elif command == 'finish-build':
         finish_build(sys.argv[2])
+    elif command == 'suspend-empty-runtime':
+        print(json.dumps(suspend_empty_runtime(sys.argv[2])))
+    elif command == 'resume-runtime':
+        print(json.dumps(runtime(sys.argv[2])))
     else:
         raise ValueError("Unknown supervisor command")
 

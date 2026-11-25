@@ -57,10 +57,13 @@ class DataStore:
         count=db.execute('SELECT count(*) FROM data_resources r JOIN projects p ON r.project_id=p.id WHERE p.account_id=? AND r.kind=?',(account,kind)).fetchone()[0]
         if count>=(2 if kind=='database' else 3):raise Problem(429,'Account data resource quota reached')
         if kind=='database':self.store.check_runtime_capacity(db,account,{'memory_mb':256,'cpus':0.25},driver=driver)
+        elif self.store.settings.legacy_vm_accounting:
+            self.store.check_runtime_capacity(db,account,{'memory_mb':0,'cpus':0},driver=driver)
         resource,now=ident(),time.time()
         definition={'admin_password':secrets.token_urlsafe(36),'app_password':secrets.token_urlsafe(36)} if kind=='database' else {}
         if import_id:definition['import_id']=import_id
         db.execute('INSERT INTO data_resources(id,project_id,kind,stage,state,definition,backend,error,created,updated,runtime_driver) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(resource,project,kind,stage,'restoring' if import_id else 'queued',self.store.seal(definition),None,None,now,now,driver))
+        self.store.retain_runtime(db,account,driver)
         return resource
 
     def bind_resources(self,db,project_id,config,environment):

@@ -55,6 +55,8 @@ CREATE TABLE IF NOT EXISTS tokens (
 CREATE TABLE IF NOT EXISTS account_retirements (
  account_id TEXT PRIMARY KEY REFERENCES accounts(id), started REAL NOT NULL,
  completed REAL, receipt TEXT);
+CREATE TABLE IF NOT EXISTS legacy_vm_reservations (
+ account_id TEXT PRIMARY KEY REFERENCES accounts(id));
 CREATE TABLE IF NOT EXISTS projects (
  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id), name TEXT NOT NULL,
  current_deployment TEXT, environment TEXT NOT NULL, created REAL NOT NULL,
@@ -180,6 +182,10 @@ class Store:
             if 'app_domain' not in {r['name'] for r in db.execute('PRAGMA table_info(projects)')}:
                 db.execute("ALTER TABLE projects ADD COLUMN app_domain TEXT")
             db.execute('UPDATE projects SET app_domain=? WHERE app_domain IS NULL',(settings.domain,))
+            if settings.legacy_vm_accounting:
+                from publisher.capacity import reservations
+                for account in reservations(db,legacy_vm_accounting=True)['legacy_accounts']:
+                    self.retain_runtime(db,account,None)
 
     @contextmanager
     def connection(self):
@@ -255,6 +261,7 @@ class Store:
             changed=db.execute('UPDATE account_retirements SET completed=?,receipt=? WHERE account_id=? AND completed IS NULL',
                                (time.time(),encode(receipt),account_id)).rowcount
             if changed:
+                db.execute('DELETE FROM legacy_vm_reservations WHERE account_id=?',(account_id,))
                 db.execute('INSERT INTO audit(account_id,token_id,action,object_id,created) VALUES(?,NULL,?,?,?)',
                            (account_id,'account.retire',account_id,time.time()))
             return json.loads(db.execute('SELECT receipt FROM account_retirements WHERE account_id=?',(account_id,)).fetchone()[0])
@@ -419,13 +426,18 @@ class Store:
         db.execute('DELETE FROM execution_targets WHERE deployment_id=?', (deployment_id,))
         db.execute('DELETE FROM deployments WHERE id=?', (deployment_id,))
 
+    def retain_runtime(self, db, account_id, driver):
+        # Removing the last application does not stop its tenant VM.
+        if self.settings.legacy_vm_accounting and driver is None:
+            db.execute('INSERT OR IGNORE INTO legacy_vm_reservations(account_id) VALUES(?)',(account_id,))
+
     def check_runtime_capacity(self, db, account_id, config, excluding="", *, driver=None):
         from publisher import capacity
         if driver == ARTIFACT_DRIVER:
             return
         # A failed release can still own a running container. Its reservation is
         # released only after resource deletion, not when a health check fails.
-        totals = capacity.reservations(db, excluding)
+        totals = capacity.reservations(db, excluding, legacy_vm_accounting=self.settings.legacy_vm_accounting)
         total, sandbox = totals["platform"], totals["sandbox"]
         account = totals["accounts"].get(account_id, capacity.empty())
         # Match the sandbox slice envelope, rather than over-reserving its parent limits.
@@ -437,10 +449,12 @@ class Store:
         if account["vcpus"] + config["cpus"] > capacity.ACCOUNT["vcpus"]:
             raise Problem(429, "Account runtime CPU reservation exceeds 4 vCPU; delete unused releases")
         limits = self.settings.platform_limits
-        if total["memory_mib"] + config["memory_mb"] > limits["memory_mib"] or total["vcpus"] + config["cpus"] > limits["vcpus"]:
+        increment = capacity.platform_increment(totals, account_id, config, driver,
+                                                legacy_vm_accounting=self.settings.legacy_vm_accounting)
+        if total["memory_mib"] + increment["memory_mib"] > limits["memory_mib"] or total["vcpus"] + increment["vcpus"] > limits["vcpus"]:
             raise Problem(429, "Platform runtime capacity is reserved; retry after releases are removed. "
-                          f"CPU {total['vcpus']:g}/{limits['vcpus']:g} vCPU reserved, requesting {config['cpus']:g}; "
-                          f"memory {total['memory_mib']}/{limits['memory_mib']} MiB reserved, requesting {config['memory_mb']}.")
+                          f"CPU {total['vcpus']:g}/{limits['vcpus']:g} vCPU reserved, requesting {increment['vcpus']:g}; "
+                          f"memory {total['memory_mib']}/{limits['memory_mib']} MiB reserved, requesting {increment['memory_mib']}.")
 
     def deployment_preconditions(self, db, actor, project, config):
         project_id = project['id']
@@ -535,6 +549,7 @@ class Store:
             driver, environment, _ = self.deployment_preconditions(db, actor, project, config)
             deployment_id, now = ident(), time.time()
             db.execute("INSERT INTO deployments(id,project_id,state,config,environment,idempotency_key,created,updated,preview_access,runtime_driver) VALUES(?,?,?,?,?,?,?,?,?,?)", (deployment_id, project_id, "uploading", encode(config), self.seal(environment), key, now, now, preview, driver))
+            self.retain_runtime(db,actor['account_id'],driver)
             self.audit(db, actor, "deployment.create", deployment_id)
             return dict(db.execute("SELECT * FROM deployments WHERE id=?", (deployment_id,)).fetchone())|{'app_domain':project['app_domain'], 'preview_mode':project['preview_mode']}
 

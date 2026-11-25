@@ -51,7 +51,7 @@ def usage(store, actor, project_id):
     with store.connection() as db:
         project = store.project(db, actor, project_id, 'deployments:read', allow_preview=True)
         account = db.execute('SELECT * FROM accounts WHERE id=?', (actor['account_id'],)).fetchone()
-        totals = capacity.reservations(db)
+        totals = capacity.reservations(db, legacy_vm_accounting=store.settings.legacy_vm_accounting)
         rows, published, _ = inventory(db, project_id)
         uploads = {r[0]: r[1] for r in db.execute('SELECT deployment_id,size FROM source_uploads')}
         releases = [view(r, uploads) for r in rows if visible(actor, r, project, published)]

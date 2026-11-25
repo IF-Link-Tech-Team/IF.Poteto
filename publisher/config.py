@@ -34,6 +34,7 @@ class Settings:
     preview_protection: bool = False
     platform_builds: bool = False
     platform_cpu_limit: float = 6
+    legacy_vm_accounting: bool = False
 
     def __post_init__(self):
         if not valid_domain(self.domain):
@@ -58,6 +59,8 @@ class Settings:
 
         if type(self.platform_builds) is not bool:
             raise ValueError('platform_builds must be a boolean')
+        if type(self.legacy_vm_accounting) is not bool:
+            raise ValueError('legacy_vm_accounting must be a boolean')
         if type(self.static_source_builds) is not bool:
             raise ValueError('static_source_builds must be a boolean')
         if type(self.sandbox_web) is not bool:
@@ -133,7 +136,8 @@ class Settings:
                    personal_production=runtime.get('personal_production', False),
                    personal_workspaces=runtime.get('personal_workspaces', False),
                    preview_protection=runtime.get('preview_protection', False),
-                   platform_cpu_limit=runtime.get('platform_cpu_limit', 6))
+                   platform_cpu_limit=runtime.get('platform_cpu_limit', 6),
+                   legacy_vm_accounting=runtime.get('legacy_vm_accounting', False))
 
     @property
     def platform_limits(self):

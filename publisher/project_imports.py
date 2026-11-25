@@ -368,6 +368,7 @@ def allocate(worker,job,row,manifest,account,source_size,expanded):
         now=time.time()
         db.execute("INSERT INTO deployments(id,project_id,state,config,environment,artifact_bytes,unpacked_bytes,created,updated,runtime_driver,preview_access) VALUES(?,?,'building',?,?,?,?,?,?,?,?)",
             (operation,project,encode(config),store.seal(manifest.release_environment),source_size,expanded,now,now,driver,preview))
+        store.retain_runtime(db,account,driver)
         db.execute('UPDATE jobs SET deployment_id=? WHERE id=?',(operation,operation))
         db.execute('UPDATE project_imports SET resource_map=? WHERE id=?',(encode(mapping),operation))
         return dict(db.execute('SELECT * FROM deployments WHERE id=?',(operation,)).fetchone()),mapping
