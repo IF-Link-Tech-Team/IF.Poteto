@@ -62,7 +62,7 @@ poteto deploy "$APP_DIR" --prebuilt --project "$PROJECT_ID" --preview --url-only
 远端预检的 `runtime_driver: "gvisor"` 表示运行阶段使用隔离容器、不使用租户 VM；构建后端独立选择，预构建镜像无需执行 CI。新个人项目默认可用，运行内存至少 256 MiB；支持原生数据库的平台还可绑定预览 PostgreSQL 并执行迁移，持久卷仍需托管项目。旧项目仍需平台开通。新个人项目默认休眠，旧项目需开通 `sandbox_sleep_projects`；`sleep: true` 会由 Sablier 在空闲后停止、访问时等待健康检查再唤醒。沿用应用的实际需求，不为选用此通道删除数据绑定。配额满或隔离启动失败时处理错误，不退回无隔离运行。
 
 - Node 源码构建需要 npm 锁文件。动态应用须监听 `0.0.0.0` 上平台提供的 `PORT`；非 npm 构建可以使用 Dockerfile。预览数据库或卷由项目所有者预先创建和授权，沿用已有绑定。
-- CLI 0.12.0 配合新版服务端会自动分片上传，并在当前应用的 `.poteto/` 保存不含凭据的待上传成品。若上传中断，在同一目录执行 `poteto deploy . --project "$PROJECT_ID" --resume <发布 ID>`，沿用输出中的 ID；不要重新构建、添加 `--local-build`、更换目标或创建另一个发布。收到服务端已入队确认后，本地待上传副本会自动删除。0.22.1 起会对 EdgeOne 522/524 和短暂断线查询已确认偏移后有限重试；证书验证或权限错误不会重试。
+- CLI 会自动分片上传，并在当前应用的 `.poteto/` 保存不含凭据的待上传成品。若上传中断，在同一目录执行 `poteto deploy . --project "$PROJECT_ID" --resume <发布 ID>`，沿用输出中的 ID；不要重新构建、添加 `--local-build`、更换目标或创建另一个发布。收到服务端已入队确认后，本地待上传副本会自动删除。对 EdgeOne 522/524 和短暂断线查询已确认偏移后有限重试；证书验证或权限错误不会重试。
 - 平台源码预检预留归一化镜像上限 516 MiB，完成后按实际大小记账；镜像远端预检会把上传包、解开外层归档后的文件和预计归一化镜像一起计入账号制品存储。读 `remote.storage.required_bytes` 和 `remaining_after_deploy_estimate`；存储 429 会给出缺口，在上传前缩小镜像或请管理员增加额度。新个人账号默认 1 GiB 制品总额度；托管平台的现有启用 IF.Link 个人账号也已提升到至少 1 GiB，更高额度保留。单镜像限制仍是压缩 128 MiB、展开 512 MiB。
 - 预检失败时按 JSON 的 `error.code` 和 `error.message` 处理；不要绕过预检或改用生产发布。上传后失败时用 `poteto deployments --project "$PROJECT_ID"` 和 `poteto logs <发布 ID>` 定位，不盲目重复创建发布。
 
@@ -72,11 +72,11 @@ poteto deploy "$APP_DIR" --prebuilt --project "$PROJECT_ID" --preview --url-only
 
 排查已部署应用的 stdout/stderr 用 `poteto logs <预览 URL> --runtime`；持续观察加 `--follow --timeout 60`，不要无限挂起 Agent。加 `--jsonl` 可逐条解析游标，断线后用同一部署的 `--after <cursor>` 续读；`--tail 0` 从新日志开始。读取不会唤醒休眠应用。平台只保留最多 200 条 / 64 KiB，出现 gap 表示日志已轮转或窗口已过，不要把缺失输出解释为没有错误。
 
-Next.js / Vite 项目可在预检和部署时同时加 `--preset nextjs` / `--preset vite`，或在 `poteto.json` 指定 `preset`。保留已有目录和锁文件。平台构建用 `--remote-build`，用户选定本机构建时保留 `--local-build`。预览变量操作需用户已授予的 `previews:env` 或管理凭据 `env:write`，不要擅自扩权；`poteto redeploy <预览 URL> --preview --url-only` 使用已保存的构建方式，预构建镜像复用成品，源码发布会在服务器重建。请求中断时沿用 stderr 中的 `--request-id`，不要重新生成请求。
+Next.js / Vite 项目可在预检和部署时同时加 `--preset nextjs` / `--preset vite`，或在 `poteto.json` 指定 `preset`。保留已有目录和锁文件。平台构建用 `--remote-build`，用户选定本机构建时保留 `--local-build`。预览变量操作需用户已授予的 `previews:env` 或管理凭据 `env:write`，不要擅自扩权；`poteto redeploy <预览 URL> --preview --url-only` 使用已保存的构建方式，预构建镜像复用成品，源码发布会沿用保存的构建方式重建。请求中断时沿用 stderr 中的 `--request-id`，不要重新生成请求。
 
 ## 项目固定地址
 
-Poteto 0.23.0 支持项目别名，例如 `my-blog.page.iflink.tech`。用 `poteto project alias` 查看；在用户授权命名后，用项目管理凭据执行 `poteto project alias my-blog`，指定其它项目时加 `--project PROJECT_ID`，移除用 `--remove`。普通预览或正式部署凭据不含项目管理权限，不能修改别名；需要用户自行用 `poteto login --production --manage-project` 授权管理，不能为设置别名擅自提升权限或发布生产版本。
+项目支持固定前缀，例如 `my-blog.page.iflink.tech`。用 `poteto project alias` 查看；在用户授权命名后，用项目管理凭据执行 `poteto project alias my-blog`，指定其它项目时加 `--project PROJECT_ID`，移除用 `--remove`。普通预览或正式部署凭据不含项目管理权限，不能修改别名；需要用户自行用 `poteto login --production --manage-project` 授权管理，不能为设置别名擅自提升权限或发布生产版本。
 
 别名只跟随该项目的正式版本；没有正式版本时保留名字但不接流量。设置不会把预览变成生产，更新、回滚不需改别名。原 `app-项目ID` 和随机预览地址不变；路由同步通常需数秒，返回配置后还要实际访问 HTTPS 验证。名字为 3–48 位小写字母、数字、连字符，字母开头，不以连字符结尾，平台保留名称不可用。改名或移除后的旧名仍归原项目保留，避免旧链接被别的用户接管。
 
@@ -110,7 +110,7 @@ Poteto 0.23.0 支持项目别名，例如 `my-blog.page.iflink.tech`。用 `pote
 
 ## 原生预览数据库与迁移
 
-Poteto 0.16.0 的 `capabilities.preview_database` 表示服务器支持个人项目的原生 PostgreSQL。创建、删除或备份数据需要用户明确授予 `previews:data`，可由用户执行 `poteto login --manage-data`；不要自行扩大 Agent 权限。已有数据库绑定可供部署 token 使用。创建时必须指定 `poteto database create --stage preview`，默认阶段仍是生产；用 `database list` 等待 `ready` 后，把返回 ID 写入 `poteto.json` 的 `database_id`。不要读取或复制平台生成的 `DATABASE_URL`。
+`capabilities.preview_database` 表示服务器支持个人项目的原生 PostgreSQL。创建、删除或备份数据需要用户明确授予 `previews:data`，可由用户执行 `poteto login --manage-data`；不要自行扩大 Agent 权限。已有数据库绑定可供部署 token 使用。创建时必须指定 `poteto database create --stage preview`，默认阶段仍是生产；用 `database list` 等待 `ready` 后，把返回 ID 写入 `poteto.json` 的 `database_id`。不要读取或复制平台生成的 `DATABASE_URL`。
 
 迁移用 `migration_command`，例如 `node migrate.mjs`；先确认脚本和镜像中有对应依赖。平台在独立 gVisor 容器中执行，只有该数据库的网络权限，最长 300 秒。失败时查看日志并修复，不盲目重试或删除数据库；已提交的 SQL 不会自动回滚。新发布会执行新迁移，脚本应可重复且向后兼容。应用仍可休眠，数据库保留运行和数据。
 

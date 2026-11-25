@@ -80,7 +80,9 @@ p{{color:#466052}}pre{{padding:18px;background:#132e24;color:#e2f4c1;border-radi
 <p>自定义前缀：获项目管理授权后运行 <code>poteto project alias my-blog</code>，使用 <code>my-blog.page.iflink.tech</code>。别名跟随正式版本，原地址保留。</p>
 <a href="/README.md">使用文档</a> · <a href="/install.sh">Shell 脚本</a> · <a href="/install.ps1">PowerShell 脚本</a> · <a href="/poteto-{VERSION}.pyz">下载 CLI</a> · <a href="/{SKILL.as_posix()}">Agent Skill</a>
 </main></html>""", encoding="utf-8")
-    shutil.copyfile(ROOT / "README.md", args.output / "README.md")
+    heading, body = (ROOT / "README.md").read_text(encoding="utf-8").split("\n", 1)
+    (args.output / "README.md").write_text(
+        f"{heading}\n\nCLI release: **{VERSION}**.\n{body}", encoding="utf-8")
     print(args.output.resolve())
 
 
