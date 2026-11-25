@@ -57,6 +57,10 @@ class KubernetesCITests(unittest.TestCase):
         installer=next(row for row in items if row['kind']=='DaemonSet')
         self.assertEqual('poteto-system',installer['metadata']['namespace'])
         self.assertTrue(installer['spec']['template']['spec']['containers'][0]['securityContext']['privileged'])
+        policies=json.loads((root/'infra/kubernetes/admission.json').read_text())['items']
+        self.assertEqual('Fail',policies[0]['spec']['failurePolicy'])
+        self.assertEqual(['Deny'],policies[1]['spec']['validationActions'])
+        self.assertEqual({'kubernetes.io/metadata.name':'poteto-ci'},policies[1]['spec']['matchResources']['namespaceSelector']['matchLabels'])
 
     def test_kubernetes_api_error_is_reported_without_driver_fallback(self):
         client=Client({'kubectl':'kubectl','kubeconfig':'/protected/ci'})

@@ -1,0 +1,85 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "admissionregistration.k8s.io/v1",
+      "kind": "ValidatingAdmissionPolicy",
+      "metadata": {
+        "name": "poteto-ci-sandbox"
+      },
+      "spec": {
+        "failurePolicy": "Fail",
+        "matchConstraints": {
+          "resourceRules": [
+            {
+              "apiGroups": [
+                ""
+              ],
+              "apiVersions": [
+                "v1"
+              ],
+              "operations": [
+                "CREATE",
+                "UPDATE"
+              ],
+              "resources": [
+                "pods"
+              ]
+            }
+          ]
+        },
+        "validations": [
+          {
+            "expression": "has(object.spec.runtimeClassName) && object.spec.runtimeClassName == \"poteto-ci\"",
+            "message": "Build pods must use the Poteto gVisor runtime"
+          },
+          {
+            "expression": "has(object.spec.automountServiceAccountToken) && object.spec.automountServiceAccountToken == false",
+            "message": "Build pods cannot receive service account credentials"
+          },
+          {
+            "expression": "(!has(object.spec.hostNetwork) || !object.spec.hostNetwork) && (!has(object.spec.hostPID) || !object.spec.hostPID) && (!has(object.spec.hostIPC) || !object.spec.hostIPC)",
+            "message": "Build pods cannot share host namespaces"
+          },
+          {
+            "expression": "!has(object.spec.volumes) || object.spec.volumes.all(v, has(v.emptyDir) || (has(v.configMap) && v.configMap.name == \"poteto-ci-code\"))",
+            "message": "Only temporary build storage and trusted supervisor code can be mounted"
+          },
+          {
+            "expression": "(!has(object.spec.initContainers) || size(object.spec.initContainers) == 0) && (!has(object.spec.ephemeralContainers) || size(object.spec.ephemeralContainers) == 0)",
+            "message": "Build pods cannot add auxiliary containers"
+          },
+          {
+            "expression": "object.spec.containers.all(c, has(c.securityContext) && (!has(c.securityContext.privileged) || !c.securityContext.privileged) && has(c.securityContext.allowPrivilegeEscalation) && !c.securityContext.allowPrivilegeEscalation)",
+            "message": "Privileged build pods and privilege escalation are forbidden"
+          },
+          {
+            "expression": "object.spec.containers.all(c, !has(c.ports) || c.ports.all(p, !has(p.hostPort) || p.hostPort == 0))",
+            "message": "Build pods cannot publish host ports"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "admissionregistration.k8s.io/v1",
+      "kind": "ValidatingAdmissionPolicyBinding",
+      "metadata": {
+        "name": "poteto-ci-sandbox"
+      },
+      "spec": {
+        "policyName": "poteto-ci-sandbox",
+        "validationActions": [
+          "Deny"
+        ],
+        "matchResources": {
+          "namespaceSelector": {
+            "matchLabels": {
+              "kubernetes.io/metadata.name": "poteto-ci"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

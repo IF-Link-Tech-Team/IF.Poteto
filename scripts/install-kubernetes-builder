@@ -27,6 +27,7 @@ def main():
     def kubectl(*parts, data=None):
         return subprocess.check_output(command + list(parts), input=data)
     config = json.loads(kubectl('config', 'view', '--raw', '--minify', '-o', 'json'))
+    kubectl('apply','-f',str(ROOT/'infra/kubernetes/admission.json'))
     api_host = urlsplit(config['clusters'][0]['cluster']['server']).hostname
     addresses = args.api_ip or [address[4][0] for address in
         socket.getaddrinfo(api_host,443,family=socket.AF_INET,type=socket.SOCK_STREAM)]
